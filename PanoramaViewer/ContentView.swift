@@ -9,6 +9,11 @@ import SwiftUI
 import PhotosUI
 import SceneKit
 import UIKit
+import AVFoundation
+import UniformTypeIdentifiers
+import SpriteKit
+import Metal
+import QuartzCore
 
 // MARK: - PanoramaView
 struct PanoramaView: UIViewRepresentable {
@@ -128,32 +133,196 @@ extension SCNQuaternion {
     }
 }
 
+// MARK: - PanoramaVideoView
+struct PanoramaVideoView: UIViewRepresentable {
+    let videoURL: URL
+    @Binding var isPlaying: Bool
+    
+    func makeUIView(context: Context) -> SCNView {
+        let sceneView = SCNView()
+        let scene = SCNScene()
+        
+        // 创建相机节点
+        let cameraNode = SCNNode()
+        cameraNode.camera = SCNCamera()
+        cameraNode.position = SCNVector3(x: 0, y: 0, z: 0)
+        scene.rootNode.addChildNode(cameraNode)
+        
+        // 创建球体
+        let sphere = SCNSphere(radius: 10)
+        sphere.segmentCount = 96
+        
+        // 创建视频播放层
+        let player = AVPlayer(url: videoURL)
+        context.coordinator.player = player
+        
+        // 创建视频层
+        let videoLayer = AVPlayerLayer(player: player)
+        videoLayer.videoGravity = .resizeAspectFill
+        videoLayer.frame = CGRect(x: 0, y: 0, width: 4096, height: 2048) // 使用较大的尺寸以获得更好的质量
+        
+        // 创建中间层
+        let metalLayer = CAMetalLayer()
+        metalLayer.frame = videoLayer.frame
+        metalLayer.device = MTLCreateSystemDefaultDevice()
+        metalLayer.pixelFormat = .bgra8Unorm
+        metalLayer.framebufferOnly = false
+        
+        // 添加视频层到中间层
+        metalLayer.addSublayer(videoLayer)
+        
+        // 创建并配置材质
+        let material = SCNMaterial()
+        material.diffuse.contents = metalLayer
+        material.diffuse.contentsTransform = SCNMatrix4MakeScale(-1, 1, 1)
+        material.isDoubleSided = true
+        material.lightingModel = .constant
+        
+        // 配置纹理过滤
+        material.diffuse.magnificationFilter = .linear
+        material.diffuse.minificationFilter = .linear
+        material.diffuse.mipFilter = .linear
+        material.diffuse.wrapS = .repeat
+        material.diffuse.wrapT = .clamp
+        
+        sphere.materials = [material]
+        
+        let sphereNode = SCNNode(geometry: sphere)
+        sphereNode.rotation = SCNVector4(0, 1, 0, Float.pi)
+        scene.rootNode.addChildNode(sphereNode)
+        
+        // 配置场景视图
+        sceneView.scene = scene
+        sceneView.backgroundColor = .black
+        sceneView.antialiasingMode = .multisampling4X
+        
+        // 配置相机控制
+        sceneView.allowsCameraControl = true
+        sceneView.defaultCameraController.maximumVerticalAngle = 85
+        sceneView.defaultCameraController.minimumVerticalAngle = -85
+        sceneView.defaultCameraController.inertiaEnabled = true
+        
+        // 配置手势
+        let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        sceneView.addGestureRecognizer(panGesture)
+        
+        // 开始播放
+        if isPlaying {
+            player.play()
+        }
+        
+        // 添加循环播放观察者
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.playerDidFinishPlaying),
+            name: .AVPlayerItemDidPlayToEndTime,
+            object: player.currentItem
+        )
+        
+        // 预加载视频
+        player.currentItem?.preferredForwardBufferDuration = 1.0
+        
+        return sceneView
+    }
+    
+    func updateUIView(_ scnView: SCNView, context: Context) {
+        if isPlaying {
+            context.coordinator.player?.play()
+        } else {
+            context.coordinator.player?.pause()
+        }
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isPlaying: $isPlaying)
+    }
+    
+    class Coordinator: NSObject {
+        var player: AVPlayer?
+        @Binding var isPlaying: Bool
+        private var previousX: Float = 0
+        private var previousY: Float = 0
+        
+        init(isPlaying: Binding<Bool>) {
+            _isPlaying = isPlaying
+            super.init()
+        }
+        
+        @objc func playerDidFinishPlaying() {
+            // 循环播放
+            player?.seek(to: CMTime.zero)
+            player?.play()
+        }
+        
+        @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
+            guard let sceneView = gesture.view as? SCNView,
+                  let cameraNode = sceneView.pointOfView else { return }
+            
+            let translation = gesture.translation(in: sceneView)
+            
+            switch gesture.state {
+            case .began:
+                previousX = 0
+                previousY = 0
+            case .changed:
+                let currentX = Float(translation.x)
+                let currentY = Float(translation.y)
+                
+                let deltaX = currentX - previousX
+                let deltaY = currentY - previousY
+                
+                let sensitivity: Float = 0.005
+                
+                let rotateY = SCNQuaternion(0, 1, 0, -deltaX * sensitivity)
+                let rotateX = SCNQuaternion(1, 0, 0, -deltaY * sensitivity)
+                
+                let currentRotation = cameraNode.orientation
+                let yRotation = SCNQuaternion.multiply(currentRotation, rotateY)
+                let finalRotation = SCNQuaternion.multiply(yRotation, rotateX)
+                
+                cameraNode.orientation = finalRotation
+                
+                previousX = currentX
+                previousY = currentY
+            default:
+                break
+            }
+        }
+        
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+            player?.pause()
+            player = nil
+        }
+    }
+}
+
 // MARK: - ContentView
 struct ContentView: View {
     @State private var selectedImage: UIImage?
+    @State private var selectedVideoURL: URL?
     @State private var isImagePickerPresented = false
+    @State private var isVideoPickerPresented = false
+    @State private var isPlaying = true
+    @State private var mediaType: MediaType = .image
+    
+    enum MediaType {
+        case image
+        case video
+    }
     
     var body: some View {
         ZStack {
-            if let image = selectedImage {
+            if let image = selectedImage, mediaType == .image {
                 PanoramaView(image: image)
                     .ignoresSafeArea()
-                
-                VStack {
-                    Spacer()
-                    Button(action: {
-                        isImagePickerPresented = true
-                    }) {
-                        Text("选择其他全景图")
-                            .foregroundColor(.white)
-                            .padding()
-                            .background(Color.black.opacity(0.6))
-                            .cornerRadius(10)
-                    }
-                    .padding(.bottom)
-                }
+                mediaControls
+            } else if let videoURL = selectedVideoURL, mediaType == .video {
+                PanoramaVideoView(videoURL: videoURL, isPlaying: $isPlaying)
+                    .ignoresSafeArea()
+                mediaControls
             } else {
-                VStack {
+                VStack(spacing: 20) {
                     Image(systemName: "photo.circle")
                         .resizable()
                         .scaledToFit()
@@ -161,12 +330,24 @@ struct ContentView: View {
                         .foregroundColor(.gray)
                     
                     Button(action: {
+                        mediaType = .image
                         isImagePickerPresented = true
                     }) {
-                        Text("选择全景图")
+                        Text("选择全景图片")
                             .foregroundColor(.white)
                             .padding()
                             .background(Color.blue)
+                            .cornerRadius(10)
+                    }
+                    
+                    Button(action: {
+                        mediaType = .video
+                        isVideoPickerPresented = true
+                    }) {
+                        Text("选择全景视频")
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.green)
                             .cornerRadius(10)
                     }
                 }
@@ -174,6 +355,43 @@ struct ContentView: View {
         }
         .sheet(isPresented: $isImagePickerPresented) {
             ImagePicker(image: $selectedImage)
+        }
+        .sheet(isPresented: $isVideoPickerPresented) {
+            VideoPicker(videoURL: $selectedVideoURL)
+        }
+    }
+    
+    private var mediaControls: some View {
+        VStack {
+            Spacer()
+            HStack {
+                if mediaType == .video {
+                    Button(action: {
+                        isPlaying.toggle()
+                    }) {
+                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .resizable()
+                            .frame(width: 44, height: 44)
+                            .foregroundColor(.white)
+                    }
+                    .padding()
+                }
+                
+                Button(action: {
+                    if mediaType == .image {
+                        isImagePickerPresented = true
+                    } else {
+                        isVideoPickerPresented = true
+                    }
+                }) {
+                    Text(mediaType == .image ? "选择其他全景图" : "选择其他视频")
+                        .foregroundColor(.white)
+                        .padding()
+                        .background(Color.black.opacity(0.6))
+                        .cornerRadius(10)
+                }
+            }
+            .padding(.bottom)
         }
     }
 }
@@ -217,6 +435,169 @@ struct ImagePicker: UIViewControllerRepresentable {
                         self.parent.image = image as? UIImage
                     }
                 }
+            }
+        }
+    }
+}
+
+// MARK: - VideoPicker
+struct VideoPicker: View {
+    @Binding var videoURL: URL?
+    @Environment(\.presentationMode) var presentationMode
+    @State private var showingSourcePicker = true
+    @State private var showingPhotoPicker = false
+    @State private var showingFilePicker = false
+    
+    var body: some View {
+        Group {
+            if showingSourcePicker {
+                List {
+                    Button(action: {
+                        showingSourcePicker = false
+                        showingPhotoPicker = true
+                    }) {
+                        Label("从相册选择", systemImage: "photo.on.rectangle")
+                    }
+                    
+                    Button(action: {
+                        showingSourcePicker = false
+                        showingFilePicker = true
+                    }) {
+                        Label("从文件选择", systemImage: "folder")
+                    }
+                    
+                    Button(action: {
+                        presentationMode.wrappedValue.dismiss()
+                    }) {
+                        Label("取消", systemImage: "xmark.circle")
+                            .foregroundColor(.red)
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingPhotoPicker) {
+            PhotoVideoPicker(videoURL: $videoURL, presentationMode: presentationMode)
+        }
+        .sheet(isPresented: $showingFilePicker) {
+            FileVideoPicker(videoURL: $videoURL, presentationMode: presentationMode)
+        }
+    }
+}
+
+// MARK: - PhotoVideoPicker
+struct PhotoVideoPicker: UIViewControllerRepresentable {
+    @Binding var videoURL: URL?
+    var presentationMode: Binding<PresentationMode>
+    
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var config = PHPickerConfiguration()
+        config.filter = .videos
+        config.selectionLimit = 1
+        
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = context.coordinator
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let parent: PhotoVideoPicker
+        
+        init(_ parent: PhotoVideoPicker) {
+            self.parent = parent
+        }
+        
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            guard let provider = results.first?.itemProvider else {
+                parent.presentationMode.wrappedValue.dismiss()
+                return
+            }
+            
+            if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
+                provider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { url, error in
+                    if let error = error {
+                        print("Error loading video: \(error)")
+                        return
+                    }
+                    
+                    guard let url = url else { return }
+                    
+                    // 创建本地副本
+                    let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                    let uniqueFileName = UUID().uuidString + "." + url.pathExtension
+                    let localURL = documentsDirectory.appendingPathComponent(uniqueFileName)
+                    
+                    do {
+                        if FileManager.default.fileExists(atPath: localURL.path) {
+                            try FileManager.default.removeItem(at: localURL)
+                        }
+                        try FileManager.default.copyItem(at: url, to: localURL)
+                        DispatchQueue.main.async {
+                            self.parent.videoURL = localURL
+                            self.parent.presentationMode.wrappedValue.dismiss()
+                        }
+                    } catch {
+                        print("Error copying video file: \(error)")
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - FileVideoPicker
+struct FileVideoPicker: UIViewControllerRepresentable {
+    @Binding var videoURL: URL?
+    var presentationMode: Binding<PresentationMode>
+    
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.movie, UTType.video])
+        picker.delegate = context.coordinator
+        picker.allowsMultipleSelection = false
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let parent: FileVideoPicker
+        
+        init(_ parent: FileVideoPicker) {
+            self.parent = parent
+        }
+        
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else { return }
+            
+            // 获取对选定URL的安全访问权限
+            guard url.startAccessingSecurityScopedResource() else { return }
+            defer { url.stopAccessingSecurityScopedResource() }
+            
+            // 创建本地副本
+            let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            let uniqueFileName = UUID().uuidString + "." + url.pathExtension
+            let localURL = documentsDirectory.appendingPathComponent(uniqueFileName)
+            
+            do {
+                if FileManager.default.fileExists(atPath: localURL.path) {
+                    try FileManager.default.removeItem(at: localURL)
+                }
+                try FileManager.default.copyItem(at: url, to: localURL)
+                DispatchQueue.main.async {
+                    self.parent.videoURL = localURL
+                    self.parent.presentationMode.wrappedValue.dismiss()
+                }
+            } catch {
+                print("Error copying video file: \(error)")
             }
         }
     }
