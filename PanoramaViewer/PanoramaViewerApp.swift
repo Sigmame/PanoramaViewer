@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import SceneKit
 
 @main
 struct PanoramaViewerApp: App {
