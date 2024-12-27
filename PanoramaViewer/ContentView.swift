@@ -414,6 +414,7 @@ struct ContentView: View {
     @State private var mediaType: MediaType = .image
     @State private var showControls = false
     @State private var videoProgress: Double = 0
+    @State private var orientation = UIDevice.current.orientation
     
     enum MediaType {
         case image
@@ -421,66 +422,74 @@ struct ContentView: View {
     }
     
     var body: some View {
-        ZStack {
-            if let image = selectedImage, mediaType == .image {
-                PanoramaView(image: image)
-                    .ignoresSafeArea()
-                    .onTapGesture {
-                        withAnimation {
-                            showControls.toggle()
+        GeometryReader { geometry in
+            ZStack {
+                if let image = selectedImage, mediaType == .image {
+                    PanoramaView(image: image)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            withAnimation {
+                                showControls.toggle()
+                            }
                         }
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                    if showControls {
+                        mediaControls
                     }
-                if showControls {
-                    mediaControls
-                }
-            } else if let videoURL = selectedVideoURL, mediaType == .video {
-                PanoramaVideoView(videoURL: videoURL, isPlaying: $isPlaying, progress: $videoProgress)
-                    .ignoresSafeArea()
-                    .onTapGesture {
-                        withAnimation {
-                            showControls.toggle()
+                } else if let videoURL = selectedVideoURL, mediaType == .video {
+                    PanoramaVideoView(videoURL: videoURL, isPlaying: $isPlaying, progress: $videoProgress)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            withAnimation {
+                                showControls.toggle()
+                            }
                         }
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                    if showControls {
+                        mediaControls
                     }
-                if showControls {
-                    mediaControls
-                }
-            } else {
-                VStack(spacing: 20) {
-                    Image(systemName: "photo.circle")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 100, height: 100)
-                        .foregroundColor(.gray)
-                    
-                    Button(action: {
-                        mediaType = .image
-                        isImagePickerPresented = true
-                    }) {
-                        Text("选择全景图片")
-                            .foregroundColor(.white)
-                            .padding()
-                            .background(Color.blue)
-                            .cornerRadius(10)
-                    }
-                    
-                    Button(action: {
-                        mediaType = .video
-                        isVideoPickerPresented = true
-                    }) {
-                        Text("选择全景视频")
-                            .foregroundColor(.white)
-                            .padding()
-                            .background(Color.green)
-                            .cornerRadius(10)
+                } else {
+                    VStack(spacing: 20) {
+                        Image(systemName: "photo.circle")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 100, height: 100)
+                            .foregroundColor(.gray)
+                        
+                        Button(action: {
+                            mediaType = .image
+                            isImagePickerPresented = true
+                        }) {
+                            Text("选择全景图片")
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Color.blue)
+                                .cornerRadius(10)
+                        }
+                        
+                        Button(action: {
+                            mediaType = .video
+                            isVideoPickerPresented = true
+                        }) {
+                            Text("选择全景视频")
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Color.green)
+                                .cornerRadius(10)
+                        }
                     }
                 }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .sheet(isPresented: $isImagePickerPresented) {
             ImagePicker(image: $selectedImage)
         }
         .sheet(isPresented: $isVideoPickerPresented) {
             VideoPicker(videoURL: $selectedVideoURL)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            orientation = UIDevice.current.orientation
         }
     }
     
