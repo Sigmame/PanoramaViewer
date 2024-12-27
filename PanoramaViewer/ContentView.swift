@@ -59,15 +59,16 @@ struct PanoramaView: UIViewRepresentable {
         sceneView.backgroundColor = .black
         sceneView.antialiasingMode = .multisampling4X  // 启用抗锯齿
         
-        // 配置相机控制
-        sceneView.allowsCameraControl = true
-        sceneView.defaultCameraController.maximumVerticalAngle = 85
-        sceneView.defaultCameraController.minimumVerticalAngle = -85
-        sceneView.defaultCameraController.inertiaEnabled = true  // 启用惯性
+        // 禁用默认的相机控制
+        sceneView.allowsCameraControl = false
         
         // 配置手势
         let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
         sceneView.addGestureRecognizer(panGesture)
+        
+        // 保存初始相机方向
+        context.coordinator.initialCameraOrientation = cameraNode.orientation
+        context.coordinator.cameraNode = cameraNode
         
         return sceneView
     }
@@ -82,12 +83,19 @@ struct PanoramaView: UIViewRepresentable {
     class Coordinator: NSObject {
         private var previousX: Float = 0
         private var previousY: Float = 0
+        private var currentRotationX: Float = 0
+        private var currentRotationY: Float = 0
+        var initialCameraOrientation = SCNQuaternion(0, 0, 0, 1)
+        weak var cameraNode: SCNNode?
+        
+        // 角度限制
+        private let maxVerticalAngle: Float = .pi / 3  // 60度
+        private let minVerticalAngle: Float = -.pi / 3 // -60度
         
         @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
-            guard let sceneView = gesture.view as? SCNView,
-                  let cameraNode = sceneView.pointOfView else { return }
+            guard let cameraNode = cameraNode else { return }
             
-            let translation = gesture.translation(in: sceneView)
+            let translation = gesture.translation(in: gesture.view)
             
             switch gesture.state {
             case .began:
@@ -103,18 +111,26 @@ struct PanoramaView: UIViewRepresentable {
                 // 计算相机旋转
                 let sensitivity: Float = 0.005  // 降低灵敏度使控制更平滑
                 
-                // 使用四元数进行旋转，避免万向节锁
-                let rotateY = SCNQuaternion(0, 1, 0, -deltaX * sensitivity)
-                let rotateX = SCNQuaternion(1, 0, 0, -deltaY * sensitivity)
+                // 更新当前旋转角度
+                currentRotationX += deltaX * sensitivity
+                currentRotationY += deltaY * sensitivity
                 
-                let currentRotation = cameraNode.orientation
-                let yRotation = SCNQuaternion.multiply(currentRotation, rotateY)
-                let finalRotation = SCNQuaternion.multiply(yRotation, rotateX)
+                // 限制垂直旋转角度
+                currentRotationY = min(max(currentRotationY, minVerticalAngle), maxVerticalAngle)
                 
-                cameraNode.orientation = finalRotation
+                // 创建旋转矩阵
+                let rotationMatrix = SCNMatrix4MakeRotation(currentRotationY, 1, 0, 0)
+                let horizontalRotation = SCNMatrix4MakeRotation(currentRotationX, 0, 1, 0)
+                let combinedRotation = SCNMatrix4Mult(horizontalRotation, rotationMatrix)
+                
+                // 应用旋转
+                cameraNode.transform = combinedRotation
                 
                 previousX = currentX
                 previousY = currentY
+            case .ended:
+                // 保存最终角度
+                break
             default:
                 break
             }
@@ -152,28 +168,29 @@ struct PanoramaVideoView: UIViewRepresentable {
         let sphere = SCNSphere(radius: 10)
         sphere.segmentCount = 96
         
-        // 创建视频播放层
-        let player = AVPlayer(url: videoURL)
+        // 创建视频播放器和输出
+        let asset = AVAsset(url: videoURL)
+        let playerItem = AVPlayerItem(asset: asset)
+        
+        // 创建视频输出
+        let videoOutput = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+        ])
+        playerItem.add(videoOutput)
+        
+        let player = AVPlayer(playerItem: playerItem)
         context.coordinator.player = player
-        
-        // 创建视频层
-        let videoLayer = AVPlayerLayer(player: player)
-        videoLayer.videoGravity = .resizeAspectFill
-        videoLayer.frame = CGRect(x: 0, y: 0, width: 4096, height: 2048) // 使用较大的尺寸以获得更好的质量
-        
-        // 创建中间层
-        let metalLayer = CAMetalLayer()
-        metalLayer.frame = videoLayer.frame
-        metalLayer.device = MTLCreateSystemDefaultDevice()
-        metalLayer.pixelFormat = .bgra8Unorm
-        metalLayer.framebufferOnly = false
-        
-        // 添加视频层到中间层
-        metalLayer.addSublayer(videoLayer)
+        context.coordinator.videoOutput = videoOutput
         
         // 创建并配置材质
         let material = SCNMaterial()
-        material.diffuse.contents = metalLayer
+        
+        // 创建一个CALayer作为中间层
+        let videoLayer = CALayer()
+        videoLayer.frame = CGRect(x: 0, y: 0, width: 4096, height: 2048)
+        videoLayer.contentsGravity = .resizeAspectFill
+        
+        material.diffuse.contents = videoLayer
         material.diffuse.contentsTransform = SCNMatrix4MakeScale(-1, 1, 1)
         material.isDoubleSided = true
         material.lightingModel = .constant
@@ -196,15 +213,19 @@ struct PanoramaVideoView: UIViewRepresentable {
         sceneView.backgroundColor = .black
         sceneView.antialiasingMode = .multisampling4X
         
-        // 配置相机控制
-        sceneView.allowsCameraControl = true
-        sceneView.defaultCameraController.maximumVerticalAngle = 85
-        sceneView.defaultCameraController.minimumVerticalAngle = -85
-        sceneView.defaultCameraController.inertiaEnabled = true
+        // 禁用默认的相机控制
+        sceneView.allowsCameraControl = false
         
         // 配置手势
         let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
         sceneView.addGestureRecognizer(panGesture)
+        
+        // 保存相机节点引用和视频层
+        context.coordinator.cameraNode = cameraNode
+        context.coordinator.videoLayer = videoLayer
+        
+        // 设置视频帧更新
+        context.coordinator.setupDisplayLink()
         
         // 开始播放
         if isPlaying {
@@ -216,11 +237,8 @@ struct PanoramaVideoView: UIViewRepresentable {
             context.coordinator,
             selector: #selector(Coordinator.playerDidFinishPlaying),
             name: .AVPlayerItemDidPlayToEndTime,
-            object: player.currentItem
+            object: playerItem
         )
-        
-        // 预加载视频
-        player.currentItem?.preferredForwardBufferDuration = 1.0
         
         return sceneView
     }
@@ -239,13 +257,41 @@ struct PanoramaVideoView: UIViewRepresentable {
     
     class Coordinator: NSObject {
         var player: AVPlayer?
+        var videoOutput: AVPlayerItemVideoOutput?
+        var videoLayer: CALayer?
+        var displayLink: CADisplayLink?
         @Binding var isPlaying: Bool
         private var previousX: Float = 0
         private var previousY: Float = 0
+        private var currentRotationX: Float = 0
+        private var currentRotationY: Float = 0
+        weak var cameraNode: SCNNode?
+        
+        // 角度限制
+        private let maxVerticalAngle: Float = .pi / 3  // 60度
+        private let minVerticalAngle: Float = -.pi / 3 // -60度
         
         init(isPlaying: Binding<Bool>) {
             _isPlaying = isPlaying
             super.init()
+        }
+        
+        func setupDisplayLink() {
+            displayLink = CADisplayLink(target: self, selector: #selector(updateVideoFrame))
+            displayLink?.add(to: .main, forMode: .common)
+        }
+        
+        @objc func updateVideoFrame() {
+            guard let output = videoOutput,
+                  let player = player,
+                  let videoLayer = videoLayer else { return }
+            
+            let itemTime = output.itemTime(forHostTime: CACurrentMediaTime())
+            if output.hasNewPixelBuffer(forItemTime: itemTime) {
+                if let pixelBuffer = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: nil) {
+                    videoLayer.contents = pixelBuffer
+                }
+            }
         }
         
         @objc func playerDidFinishPlaying() {
@@ -255,10 +301,9 @@ struct PanoramaVideoView: UIViewRepresentable {
         }
         
         @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
-            guard let sceneView = gesture.view as? SCNView,
-                  let cameraNode = sceneView.pointOfView else { return }
+            guard let cameraNode = cameraNode else { return }
             
-            let translation = gesture.translation(in: sceneView)
+            let translation = gesture.translation(in: gesture.view)
             
             switch gesture.state {
             case .began:
@@ -273,26 +318,39 @@ struct PanoramaVideoView: UIViewRepresentable {
                 
                 let sensitivity: Float = 0.005
                 
-                let rotateY = SCNQuaternion(0, 1, 0, -deltaX * sensitivity)
-                let rotateX = SCNQuaternion(1, 0, 0, -deltaY * sensitivity)
+                // 更新当前旋转角度
+                currentRotationX += deltaX * sensitivity
+                currentRotationY += deltaY * sensitivity
                 
-                let currentRotation = cameraNode.orientation
-                let yRotation = SCNQuaternion.multiply(currentRotation, rotateY)
-                let finalRotation = SCNQuaternion.multiply(yRotation, rotateX)
+                // 限制垂直旋转角度
+                currentRotationY = min(max(currentRotationY, minVerticalAngle), maxVerticalAngle)
                 
-                cameraNode.orientation = finalRotation
+                // 创建旋转矩阵
+                let rotationMatrix = SCNMatrix4MakeRotation(currentRotationY, 1, 0, 0)
+                let horizontalRotation = SCNMatrix4MakeRotation(currentRotationX, 0, 1, 0)
+                let combinedRotation = SCNMatrix4Mult(horizontalRotation, rotationMatrix)
+                
+                // 应用旋转
+                cameraNode.transform = combinedRotation
                 
                 previousX = currentX
                 previousY = currentY
+            case .ended:
+                // 保存最终角度
+                break
             default:
                 break
             }
         }
         
         deinit {
+            displayLink?.invalidate()
+            displayLink = nil
             NotificationCenter.default.removeObserver(self)
             player?.pause()
             player = nil
+            videoOutput = nil
+            videoLayer = nil
         }
     }
 }
