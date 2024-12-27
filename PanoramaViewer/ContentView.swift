@@ -388,7 +388,18 @@ struct PanoramaVideoView: UIViewRepresentable {
                   let duration = player.currentItem?.duration else { return }
             
             let time = CMTime(seconds: duration.seconds * progress, preferredTimescale: duration.timescale)
-            player.seek(to: time)
+            // 暂停当前播放
+            player.pause()
+            
+            // 使用精确跳转
+            player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                if finished {
+                    // 如果之前是播放状态，则恢复播放
+                    if self?.isPlaying == true {
+                        player.play()
+                    }
+                }
+            }
         }
     }
 }
@@ -496,31 +507,50 @@ struct ContentView: View {
             Spacer()
             
             // 底部控制栏
-            VStack(spacing: 0) {
-                if mediaType == .video {
-                    // 视频进度条
-                    Slider(value: $videoProgress, in: 0...1)
-                        .accentColor(.white)
-                        .padding(.horizontal)
-                    
-                    HStack {
+            if mediaType == .video {
+                VStack(spacing: 8) {
+                    // 进度条和控制按钮在同一行
+                    HStack(spacing: 12) {
+                        // 播放/暂停按钮
                         Button(action: {
                             isPlaying.toggle()
                         }) {
                             Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
                                 .resizable()
-                                .frame(width: 44, height: 44)
+                                .frame(width: 32, height: 32)
                                 .foregroundColor(.white)
                         }
-                        .padding()
                         
-                        Spacer()
+                        // 视频进度条
+                        Slider(value: $videoProgress, in: 0...1, onEditingChanged: { editing in
+                            if !editing {
+                                // 当用户完成拖动时，发送通知更新视频位置
+                                NotificationCenter.default.post(
+                                    name: NSNotification.Name("seekVideo"),
+                                    object: nil,
+                                    userInfo: ["progress": videoProgress]
+                                )
+                            }
+                        })
+                        .accentColor(.white)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                }
+                .background(Color.black.opacity(0.5))
+            }
+        }
+        .transition(.opacity)
+        .onAppear {
+            // 5秒后自动隐藏控制栏
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                withAnimation {
+                    if showControls {
+                        showControls = false
                     }
                 }
             }
-            .background(Color.black.opacity(0.5))
         }
-        .transition(.opacity)
     }
 }
 
