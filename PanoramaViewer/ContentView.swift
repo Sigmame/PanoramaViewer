@@ -152,6 +152,7 @@ extension SCNQuaternion {
 struct PanoramaVideoView: UIViewRepresentable {
     let videoURL: URL
     @Binding var isPlaying: Bool
+    @Binding var progress: Double
     
     func makeUIView(context: Context) -> SCNView {
         let sceneView = SCNView()
@@ -239,6 +240,15 @@ struct PanoramaVideoView: UIViewRepresentable {
             object: playerItem
         )
         
+        // 添加进度观察
+        let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        context.coordinator.progressObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
+            let duration = player.currentItem?.duration.seconds ?? 0
+            if duration > 0 {
+                progress = time.seconds / duration
+            }
+        }
+        
         return sceneView
     }
     
@@ -251,7 +261,7 @@ struct PanoramaVideoView: UIViewRepresentable {
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(isPlaying: $isPlaying)
+        Coordinator(isPlaying: $isPlaying, progress: $progress)
     }
     
     class Coordinator: NSObject {
@@ -259,7 +269,9 @@ struct PanoramaVideoView: UIViewRepresentable {
         var videoOutput: AVPlayerItemVideoOutput?
         var videoLayer: CALayer?
         var displayLink: CADisplayLink?
+        var progressObserver: Any?
         @Binding var isPlaying: Bool
+        @Binding var progress: Double
         private var previousX: Float = 0
         private var previousY: Float = 0
         private var currentRotationX: Float = 0
@@ -270,9 +282,24 @@ struct PanoramaVideoView: UIViewRepresentable {
         private let maxVerticalAngle: Float = .pi / 3  // 60度
         private let minVerticalAngle: Float = -.pi / 3 // -60度
         
-        init(isPlaying: Binding<Bool>) {
+        init(isPlaying: Binding<Bool>, progress: Binding<Double>) {
             _isPlaying = isPlaying
+            _progress = progress
             super.init()
+            
+            // 添加进度更新通知观察者
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(handleSeek(_:)),
+                name: NSNotification.Name("seekVideo"),
+                object: nil
+            )
+        }
+        
+        @objc func handleSeek(_ notification: Notification) {
+            if let progress = notification.userInfo?["progress"] as? Double {
+                seek(to: progress)
+            }
         }
         
         func setupDisplayLink() {
@@ -343,6 +370,9 @@ struct PanoramaVideoView: UIViewRepresentable {
         }
         
         deinit {
+            if let observer = progressObserver {
+                player?.removeTimeObserver(observer)
+            }
             displayLink?.invalidate()
             displayLink = nil
             NotificationCenter.default.removeObserver(self)
@@ -350,6 +380,15 @@ struct PanoramaVideoView: UIViewRepresentable {
             player = nil
             videoOutput = nil
             videoLayer = nil
+        }
+        
+        // 添加进度控制方法
+        func seek(to progress: Double) {
+            guard let player = player,
+                  let duration = player.currentItem?.duration else { return }
+            
+            let time = CMTime(seconds: duration.seconds * progress, preferredTimescale: duration.timescale)
+            player.seek(to: time)
         }
     }
 }
@@ -362,6 +401,8 @@ struct ContentView: View {
     @State private var isVideoPickerPresented = false
     @State private var isPlaying = true
     @State private var mediaType: MediaType = .image
+    @State private var showControls = false
+    @State private var videoProgress: Double = 0
     
     enum MediaType {
         case image
@@ -373,11 +414,25 @@ struct ContentView: View {
             if let image = selectedImage, mediaType == .image {
                 PanoramaView(image: image)
                     .ignoresSafeArea()
-                mediaControls
+                    .onTapGesture {
+                        withAnimation {
+                            showControls.toggle()
+                        }
+                    }
+                if showControls {
+                    mediaControls
+                }
             } else if let videoURL = selectedVideoURL, mediaType == .video {
-                PanoramaVideoView(videoURL: videoURL, isPlaying: $isPlaying)
+                PanoramaVideoView(videoURL: videoURL, isPlaying: $isPlaying, progress: $videoProgress)
                     .ignoresSafeArea()
-                mediaControls
+                    .onTapGesture {
+                        withAnimation {
+                            showControls.toggle()
+                        }
+                    }
+                if showControls {
+                    mediaControls
+                }
             } else {
                 VStack(spacing: 20) {
                     Image(systemName: "photo.circle")
@@ -420,36 +475,52 @@ struct ContentView: View {
     
     private var mediaControls: some View {
         VStack {
-            Spacer()
+            // 顶部返回按钮
             HStack {
-                if mediaType == .video {
-                    Button(action: {
-                        isPlaying.toggle()
-                    }) {
-                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .resizable()
-                            .frame(width: 44, height: 44)
-                            .foregroundColor(.white)
-                    }
-                    .padding()
-                }
-                
                 Button(action: {
-                    if mediaType == .image {
-                        isImagePickerPresented = true
-                    } else {
-                        isVideoPickerPresented = true
-                    }
+                    selectedImage = nil
+                    selectedVideoURL = nil
+                    showControls = false
                 }) {
-                    Text(mediaType == .image ? "选择其他全景图" : "选择其他视频")
+                    Image(systemName: "chevron.left")
+                        .font(.title2)
                         .foregroundColor(.white)
                         .padding()
-                        .background(Color.black.opacity(0.6))
-                        .cornerRadius(10)
+                        .background(Color.black.opacity(0.5))
+                        .clipShape(Circle())
+                }
+                Spacer()
+            }
+            .padding()
+            
+            Spacer()
+            
+            // 底部控制栏
+            VStack(spacing: 0) {
+                if mediaType == .video {
+                    // 视频进度条
+                    Slider(value: $videoProgress, in: 0...1)
+                        .accentColor(.white)
+                        .padding(.horizontal)
+                    
+                    HStack {
+                        Button(action: {
+                            isPlaying.toggle()
+                        }) {
+                            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                .resizable()
+                                .frame(width: 44, height: 44)
+                                .foregroundColor(.white)
+                        }
+                        .padding()
+                        
+                        Spacer()
+                    }
                 }
             }
-            .padding(.bottom)
+            .background(Color.black.opacity(0.5))
         }
+        .transition(.opacity)
     }
 }
 
