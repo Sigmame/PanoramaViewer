@@ -108,8 +108,7 @@ struct PanoramaView: UIViewRepresentable {
                 let deltaX = currentX - previousX
                 let deltaY = currentY - previousY
                 
-                // 计算相机旋转
-                let sensitivity: Float = 0.005  // 降低灵敏度使控制更平滑
+                let sensitivity: Float = 0.005
                 
                 // 更新当前旋转角度
                 currentRotationX += deltaX * sensitivity
@@ -118,13 +117,13 @@ struct PanoramaView: UIViewRepresentable {
                 // 限制垂直旋转角度
                 currentRotationY = min(max(currentRotationY, minVerticalAngle), maxVerticalAngle)
                 
-                // 创建旋转矩阵
-                let rotationMatrix = SCNMatrix4MakeRotation(currentRotationY, 1, 0, 0)
-                let horizontalRotation = SCNMatrix4MakeRotation(currentRotationX, 0, 1, 0)
-                let combinedRotation = SCNMatrix4Mult(horizontalRotation, rotationMatrix)
+                // 先应用垂直旋转，再应用水平旋转
+                var transform = SCNMatrix4Identity
+                transform = SCNMatrix4Rotate(transform, currentRotationX, 0, 1, 0)  // 水平旋转
+                transform = SCNMatrix4Rotate(transform, -currentRotationY, 1, 0, 0) // 垂直旋转（注意负号）
                 
                 // 应用旋转
-                cameraNode.transform = combinedRotation
+                cameraNode.transform = transform
                 
                 previousX = currentX
                 previousY = currentY
@@ -325,13 +324,13 @@ struct PanoramaVideoView: UIViewRepresentable {
                 // 限制垂直旋转角度
                 currentRotationY = min(max(currentRotationY, minVerticalAngle), maxVerticalAngle)
                 
-                // 创建旋转矩阵
-                let rotationMatrix = SCNMatrix4MakeRotation(currentRotationY, 1, 0, 0)
-                let horizontalRotation = SCNMatrix4MakeRotation(currentRotationX, 0, 1, 0)
-                let combinedRotation = SCNMatrix4Mult(horizontalRotation, rotationMatrix)
+                // 先应用垂直旋转，再应用水平旋转
+                var transform = SCNMatrix4Identity
+                transform = SCNMatrix4Rotate(transform, currentRotationX, 0, 1, 0)  // 水平旋转
+                transform = SCNMatrix4Rotate(transform, -currentRotationY, 1, 0, 0) // 垂直旋转（注意负号）
                 
                 // 应用旋转
-                cameraNode.transform = combinedRotation
+                cameraNode.transform = transform
                 
                 previousX = currentX
                 previousY = currentY
