@@ -89,8 +89,8 @@ struct PanoramaView: UIViewRepresentable {
         weak var cameraNode: SCNNode?
         
         // 角度限制
-        private let maxVerticalAngle: Float = .pi / 3  // 60度
-        private let minVerticalAngle: Float = -.pi / 3 // -60度
+        private let maxVerticalAngle: Float = .pi / 2  // 90度
+        private let minVerticalAngle: Float = -.pi / 2 // -90度
         
         @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
             guard let cameraNode = cameraNode else { return }
@@ -547,10 +547,10 @@ struct ContentView: View {
                                         .frame(width: 100, height: 100)
                                         .foregroundColor(.gray)
                                     
-                                    Text("需要访问相册权限")
+                                    Text("need_photo_access".localized())
                                         .font(.headline)
                                     
-                                    Text("请允许访问相册以查看全景照片和视频")
+                                    Text("allow_access_description".localized())
                                         .font(.subheadline)
                                         .foregroundColor(.gray)
                                         .multilineTextAlignment(.center)
@@ -561,7 +561,7 @@ struct ContentView: View {
                                             UIApplication.shared.open(url)
                                         }
                                     }) {
-                                        Text("前往设置")
+                                        Text("go_to_settings".localized())
                                             .foregroundColor(.white)
                                             .padding()
                                             .background(Color.blue)
@@ -583,7 +583,7 @@ struct ContentView: View {
                                 EmptyView()
                             }
                         }
-                        .navigationTitle("全景媒体库")
+                        .navigationTitle("panorama_media_library".localized())
                         .toolbar {
                             ToolbarItem(placement: .navigationBarTrailing) {
                                 Button(action: {
@@ -607,15 +607,15 @@ struct ContentView: View {
         }
         .actionSheet(isPresented: $showingOptions) {
             ActionSheet(
-                title: Text("选择媒体"),
+                title: Text("select_media".localized()),
                 buttons: [
-                    .default(Text("从相册选择")) {
+                    .default(Text("from_photos".localized())) {
                         isImagePickerPresented = true
                     },
-                    .default(Text("从文件选择")) {
+                    .default(Text("from_files".localized())) {
                         isFilePickerPresented = true
                     },
-                    .cancel(Text("取消"))
+                    .cancel(Text("cancel".localized()))
                 ]
             )
         }

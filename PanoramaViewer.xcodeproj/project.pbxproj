@@ -15,6 +15,9 @@
 		0D591F262D1DE4E700830979 /* PanoramaViewerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D591F252D1DE4E700830979 /* PanoramaViewerTests.swift */; };
 		0D591F302D1DE4E700830979 /* PanoramaViewerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D591F2F2D1DE4E700830979 /* PanoramaViewerUITests.swift */; };
 		0D591F322D1DE4E700830979 /* PanoramaViewerUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D591F312D1DE4E700830979 /* PanoramaViewerUITestsLaunchTests.swift */; };
+		0D7414342D204D43006EF76E /* LocalizationExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D7414332D204D43006EF76E /* LocalizationExtensions.swift */; };
+		0D7414362D204D56006EF76E /* en.lproj in Resources */ = {isa = PBXBuildFile; fileRef = 0D7414352D204D56006EF76E /* en.lproj */; };
+		0D7414382D204D63006EF76E /* zh-Hans.lproj in Resources */ = {isa = PBXBuildFile; fileRef = 0D7414372D204D63006EF76E /* zh-Hans.lproj */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -46,6 +49,9 @@
 		0D591F2B2D1DE4E700830979 /* PanoramaViewerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PanoramaViewerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0D591F2F2D1DE4E700830979 /* PanoramaViewerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanoramaViewerUITests.swift; sourceTree = "<group>"; };
 		0D591F312D1DE4E700830979 /* PanoramaViewerUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanoramaViewerUITestsLaunchTests.swift; sourceTree = "<group>"; };
+		0D7414332D204D43006EF76E /* LocalizationExtensions.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LocalizationExtensions.swift; sourceTree = "<group>"; };
+		0D7414352D204D56006EF76E /* en.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = en.lproj; sourceTree = "<group>"; };
+		0D7414372D204D63006EF76E /* zh-Hans.lproj */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "zh-Hans.lproj"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -96,6 +102,9 @@
 		0D591F132D1DE4E100830979 /* PanoramaViewer */ = {
 			isa = PBXGroup;
 			children = (
+				0D7414372D204D63006EF76E /* zh-Hans.lproj */,
+				0D7414352D204D56006EF76E /* en.lproj */,
+				0D7414332D204D43006EF76E /* LocalizationExtensions.swift */,
 				0D2BAF622D2031A90095B7A2 /* PanoramaMedia.swift */,
 				0D591F142D1DE4E100830979 /* PanoramaViewerApp.swift */,
 				0D591F162D1DE4E100830979 /* ContentView.swift */,
@@ -215,6 +224,7 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				"zh-Hans",
 				Base,
 			);
 			mainGroup = 0D591F082D1DE4E100830979;
@@ -235,7 +245,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				0D591F1C2D1DE4E600830979 /* Preview Assets.xcassets in Resources */,
+				0D7414362D204D56006EF76E /* en.lproj in Resources */,
 				0D591F192D1DE4E600830979 /* Assets.xcassets in Resources */,
+				0D7414382D204D63006EF76E /* zh-Hans.lproj in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -260,6 +272,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0D7414342D204D43006EF76E /* LocalizationExtensions.swift in Sources */,
 				0D591F172D1DE4E100830979 /* ContentView.swift in Sources */,
 				0D2BAF632D2031A90095B7A2 /* PanoramaMedia.swift in Sources */,
 				0D591F152D1DE4E100830979 /* PanoramaViewerApp.swift in Sources */,
