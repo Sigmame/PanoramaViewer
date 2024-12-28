@@ -1,0 +1,8 @@
+"panorama_media_library" = "全景媒体库";
+"select_media" = "选择媒体";
+"from_photos" = "从相册选择";
+"from_files" = "从文件选择";
+"cancel" = "取消";
+"need_photo_access" = "需要访问相册权限";
+"allow_access_description" = "请允许访问相册以查看全景照片和视频";
+"go_to_settings" = "前往设置"; 
