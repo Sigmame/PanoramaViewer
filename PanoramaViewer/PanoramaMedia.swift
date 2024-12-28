@@ -117,21 +117,24 @@ class PanoramaMediaManager: NSObject, ObservableObject {
     
     private func loadThumbnail(for asset: PHAsset, completion: @escaping (UIImage?) -> Void) {
         let options = PHImageRequestOptions()
-        options.deliveryMode = .highQualityFormat
+        options.deliveryMode = .fastFormat
         options.isNetworkAccessAllowed = true
-        options.resizeMode = .exact
+        options.resizeMode = .fast
+        options.isSynchronous = false
+        options.version = .current
         
-        let scale = UIScreen.main.scale
-        let targetWidth: CGFloat = 400 * scale
-        let targetHeight: CGFloat = 200 * scale
+        let targetSize = CGSize(width: 320, height: 160)
         
+        // 对图片和视频统一使用 requestImage，这样可以利用系统缓存
         imageManager.requestImage(
             for: asset,
-            targetSize: CGSize(width: targetWidth, height: targetHeight),
+            targetSize: targetSize,
             contentMode: .aspectFill,
             options: options
         ) { image, _ in
-            completion(image)
+            DispatchQueue.main.async {
+                completion(image)
+            }
         }
     }
     
