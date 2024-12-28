@@ -154,6 +154,7 @@ struct PanoramaVideoView: UIViewRepresentable {
     @Binding var isPlaying: Bool
     @Binding var coordinator: Coordinator?
     @Binding var isMuted: Bool
+    @Binding var progress: Double
     
     static var activeAudioSession: Bool = false
     
@@ -217,6 +218,18 @@ struct PanoramaVideoView: UIViewRepresentable {
         
         // 设置初始静音状态
         player.isMuted = isMuted
+        
+        // 添加进度观察者
+        let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        context.coordinator.progressObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
+            let duration = playerItem.duration
+            if duration.isValid {
+                let durationSeconds = CMTimeGetSeconds(duration)
+                if durationSeconds > 0 {
+                    progress = time.seconds / durationSeconds
+                }
+            }
+        }
         
         // 创建并配置材质
         let material = SCNMaterial()
@@ -292,7 +305,7 @@ struct PanoramaVideoView: UIViewRepresentable {
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(isPlaying: $isPlaying, isMuted: $isMuted)
+        Coordinator(isPlaying: $isPlaying, isMuted: $isMuted, progress: $progress)
     }
     
     class Coordinator: NSObject {
@@ -300,8 +313,10 @@ struct PanoramaVideoView: UIViewRepresentable {
         var videoOutput: AVPlayerItemVideoOutput?
         var videoLayer: CALayer?
         var displayLink: CADisplayLink?
+        var progressObserver: Any?  // 添加进度观察者属性
         @Binding var isPlaying: Bool
         @Binding var isMuted: Bool
+        @Binding var progress: Double
         private var previousX: Float = 0
         private var previousY: Float = 0
         private var currentRotationX: Float = 0
@@ -312,9 +327,10 @@ struct PanoramaVideoView: UIViewRepresentable {
         private let maxVerticalAngle: Float = .pi / 2  // 90度
         private let minVerticalAngle: Float = -.pi / 2 // -90度
         
-        init(isPlaying: Binding<Bool>, isMuted: Binding<Bool>) {
+        init(isPlaying: Binding<Bool>, isMuted: Binding<Bool>, progress: Binding<Double>) {
             _isPlaying = isPlaying
             _isMuted = isMuted
+            _progress = progress
             super.init()
         }
         
@@ -392,20 +408,42 @@ struct PanoramaVideoView: UIViewRepresentable {
             // 停止并清理旧的播放器
             player?.pause()
             player?.replaceCurrentItem(with: nil)
-            player = nil
             
-            // 清理视频输出
+            // 移除进度观察者
+            if let observer = progressObserver {
+                player?.removeTimeObserver(observer)
+                progressObserver = nil
+            }
+            
+            player = nil
             videoOutput = nil
             videoLayer = nil
-            
-            // 清理显示链接
             displayLink?.invalidate()
             displayLink = nil
-            
             NotificationCenter.default.removeObserver(self)
-            
-            // 停用音频会话
             PanoramaVideoView.deactivateAudioSession()
+        }
+        
+        // 添加进度控制方法
+        func seek(to progress: Double) {
+            guard let player = player,
+                  let duration = player.currentItem?.duration else { return }
+            
+            let time = CMTime(seconds: duration.seconds * progress, preferredTimescale: duration.timescale)
+            
+            // 使用精确跳转，并在完成后更新进度
+            player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                guard let self = self else { return }
+                if finished {
+                    // 更新进度状态
+                    self.progress = progress
+                    
+                    // 如果之前是播放状态，则恢复播放
+                    if self.isPlaying {
+                        player.play()
+                    }
+                }
+            }
         }
     }
 }
@@ -423,11 +461,17 @@ struct ContentView: View {
     @State private var orientation = UIDevice.current.orientation
     @State private var showingOptions = false
     @State private var videoCoordinator: PanoramaVideoView.Coordinator?
-    @State private var isMuted = false  // 添加静音状态
+    @State private var isMuted = false
+    @State private var videoProgress: Double = 0  // 添加进度状态
     
-    private let columns = [
-        GridItem(.adaptive(minimum: 160), spacing: 16)
-    ]
+    @Environment(\.verticalSizeClass) var verticalSizeClass
+    
+    private var columns: [GridItem] {
+        let minWidth: CGFloat = verticalSizeClass == .regular ? 160 : 200
+        return [
+            GridItem(.adaptive(minimum: minWidth), spacing: 16)
+        ]
+    }
     
     var body: some View {
         GeometryReader { geometry in
@@ -448,7 +492,8 @@ struct ContentView: View {
                     PanoramaVideoView(videoURL: videoURL, 
                                     isPlaying: $isPlaying, 
                                     coordinator: $videoCoordinator,
-                                    isMuted: $isMuted)
+                                    isMuted: $isMuted,
+                                    progress: $videoProgress)
                         .ignoresSafeArea()
                         .onTapGesture {
                             withAnimation {
@@ -501,20 +546,21 @@ struct ContentView: View {
                                 }
                             case .authorized, .limited:
                                 ScrollView {
-                                    LazyVGrid(columns: columns, spacing: 16) {
+                                    LazyVGrid(columns: columns, spacing: verticalSizeClass == .regular ? 16 : 12) {
                                         ForEach(mediaManager.panoramaMedia) { media in
                                             MediaThumbnailView(media: media) { media in
                                                 loadAndDisplayMedia(media)
                                             }
                                         }
                                     }
-                                    .padding()
+                                    .padding(verticalSizeClass == .regular ? 16 : 12)
                                 }
                             @unknown default:
                                 EmptyView()
                             }
                         }
                         .navigationTitle("panorama_media_library".localized())
+                        .navigationBarTitleDisplayMode(verticalSizeClass == .regular ? .large : .inline)
                         .toolbar {
                             ToolbarItem(placement: .navigationBarTrailing) {
                                 Button(action: {
@@ -525,7 +571,11 @@ struct ContentView: View {
                                 }
                             }
                         }
+                        
+                        // 添加空视图作为详情视图，防止分栏显示
+                        EmptyView()
                     }
+                    .navigationViewStyle(StackNavigationViewStyle()) // 强制使用堆栈样式
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
@@ -592,15 +642,21 @@ struct ContentView: View {
             // 顶部返回按钮
             HStack {
                 Button(action: {
+                    // 如果当前是视频，先清理音频会话和播放器
                     if mediaType == .video {
-                        // 如果当前是视频，清理音频会话
+                        videoCoordinator?.cleanup()
+                        videoCoordinator = nil
                         PanoramaVideoView.deactivateAudioSession()
                     }
-                    // 清除媒体
+                    
+                    // 重置所有状态
                     selectedImage = nil
                     selectedVideoURL = nil
                     showControls = false
                     isPlaying = false
+                    isMuted = false
+                    videoProgress = 0
+                    mediaType = .image
                 }) {
                     Image(systemName: "chevron.left")
                         .font(.title2)
@@ -629,7 +685,23 @@ struct ContentView: View {
                             .contentShape(Rectangle())
                     }
                     
-                    Spacer()
+                    // 进度条
+                    Slider(value: $videoProgress, in: 0...1, onEditingChanged: { editing in
+                        guard let player = videoCoordinator?.player,
+                              let duration = player.currentItem?.duration else { return }
+                        
+                        if editing {
+                            // 拖动时暂停播放
+                            player.pause()
+                        } else {
+                            // 拖动结束后直接设置时间
+                            let targetTime = CMTime(seconds: duration.seconds * videoProgress, 
+                                                  preferredTimescale: duration.timescale)
+                            player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
+                            player.play()
+                        }
+                    })
+                    .accentColor(.white)
                     
                     // 静音按钮
                     Button(action: {
@@ -665,35 +737,41 @@ struct ContentView: View {
 struct MediaThumbnailView: View {
     let media: PanoramaMedia
     let onTap: (PanoramaMedia) -> Void
+    @Environment(\.verticalSizeClass) var verticalSizeClass
     
     var body: some View {
-        Button(action: {
-            onTap(media)
-        }) {
-            ZStack {
-                if let thumbnail = media.thumbnail {
-                    Image(uiImage: thumbnail)
-                        .resizable()
-                        .aspectRatio(2/1, contentMode: .fill)
-                        .frame(height: 100)
-                        .clipped()
-                        .cornerRadius(8)
-                } else {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.3))
-                        .aspectRatio(2/1, contentMode: .fill)
-                        .frame(height: 100)
-                        .cornerRadius(8)
+        GeometryReader { geometry in
+            Button(action: {
+                onTap(media)
+            }) {
+                ZStack {
+                    if let thumbnail = media.thumbnail {
+                        Image(uiImage: thumbnail)
+                            .resizable()
+                            .aspectRatio(2/1, contentMode: .fill)
+                            .frame(height: verticalSizeClass == .regular ? 100 : 80)
+                            .clipped()
+                            .cornerRadius(8)
+                    } else {
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.3))
+                            .aspectRatio(2/1, contentMode: .fill)
+                            .frame(height: verticalSizeClass == .regular ? 100 : 80)
+                            .cornerRadius(8)
+                    }
+                    
+                    if media.type == .video {
+                        Image(systemName: "play.circle.fill")
+                            .font(.title)
+                            .foregroundColor(.white)
+                            .shadow(radius: 2)
+                    }
                 }
-                
-                if media.type == .video {
-                    Image(systemName: "play.circle.fill")
-                        .font(.title)
-                        .foregroundColor(.white)
-                        .shadow(radius: 2)
-                }
+                .frame(maxWidth: .infinity)
+                .frame(height: verticalSizeClass == .regular ? 100 : 80)
             }
         }
+        .frame(height: verticalSizeClass == .regular ? 100 : 80)
     }
 }
 
@@ -735,8 +813,12 @@ struct ImagePicker: UIViewControllerRepresentable {
                 provider.loadObject(ofClass: UIImage.self) { image, _ in
                     if let image = image as? UIImage {
                         DispatchQueue.main.async {
+                            // 如果之前在播放视频，先清理音频会话
+                            if self.parent.videoURL != nil {
+                                PanoramaVideoView.deactivateAudioSession()
+                            }
+                            self.parent.videoURL = nil  // 清除视频URL
                             self.parent.image = image
-                            self.parent.videoURL = nil  // 清除可能存在的视频URL
                         }
                     }
                 }
@@ -756,8 +838,12 @@ struct ImagePicker: UIViewControllerRepresentable {
                         try FileManager.default.copyItem(at: url, to: localURL)
                         
                         DispatchQueue.main.async {
+                            // 如果之前在播放视频，先清理音频��话
+                            if self.parent.videoURL != nil {
+                                PanoramaVideoView.deactivateAudioSession()
+                            }
+                            self.parent.image = nil  // 清除图片
                             self.parent.videoURL = localURL
-                            self.parent.image = nil  // 清除可能存在的图片
                         }
                     } catch {
                         print("Error copying video file: \(error)")
@@ -815,17 +901,25 @@ struct UnifiedFilePicker: UIViewControllerRepresentable {
                 if UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true {
                     if let image = UIImage(contentsOfFile: localURL.path) {
                         DispatchQueue.main.async {
-                            self.parent.image = image
+                            // 如果之前在播放视频，先清理音频会话
+                            if self.parent.mediaType == .video {
+                                PanoramaVideoView.deactivateAudioSession()
+                            }
                             self.parent.videoURL = nil  // 清除视频URL
                             self.parent.mediaType = .image
+                            self.parent.image = image
                             self.parent.presentationMode.wrappedValue.dismiss()
                         }
                     }
                 } else {
                     DispatchQueue.main.async {
-                        self.parent.videoURL = localURL
+                        // 如果之前在播放视频，先清理音频会话
+                        if self.parent.mediaType == .video {
+                            PanoramaVideoView.deactivateAudioSession()
+                        }
                         self.parent.image = nil  // 清除图片
                         self.parent.mediaType = .video
+                        self.parent.videoURL = localURL
                         self.parent.presentationMode.wrappedValue.dismiss()
                     }
                 }
