@@ -3,11 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>NSPhotoLibraryUsageDescription</key>
-    <string>需要访问您的相册来选择全景图片</string>
+    <string>需要访问您的相册来自动识别和展示全景照片与视频。</string>
     <key>NSPhotoLibraryAddUsageDescription</key>
-    <string>需要访问您的相册来保存全景图片</string>
+    <string>需要访问您的相册来保存全景图片。</string>
     <key>NSDocumentsFolderUsageDescription</key>
-    <string>需要访问文件来选择全景视频</string>
+    <string>需要访问文件来选择全景视频。</string>
+    <key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>
+    <true/>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>
@@ -26,4 +28,4 @@
         </dict>
     </dict>
 </dict>
-</plist> 
+</plist>

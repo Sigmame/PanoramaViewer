@@ -154,6 +154,31 @@ struct PanoramaVideoView: UIViewRepresentable {
     @Binding var isPlaying: Bool
     @Binding var progress: Double
     
+    static var activeAudioSession: Bool = false
+    
+    static func deactivateAudioSession() {
+        if activeAudioSession {
+            do {
+                try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+                activeAudioSession = false
+            } catch {
+                print("Failed to deactivate audio session: \(error)")
+            }
+        }
+    }
+    
+    static func activateAudioSession() {
+        if !activeAudioSession {
+            do {
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+                try AVAudioSession.sharedInstance().setActive(true)
+                activeAudioSession = true
+            } catch {
+                print("Failed to set audio session category: \(error)")
+            }
+        }
+    }
+    
     func makeUIView(context: Context) -> SCNView {
         let sceneView = SCNView()
         let scene = SCNScene()
@@ -168,6 +193,12 @@ struct PanoramaVideoView: UIViewRepresentable {
         let sphere = SCNSphere(radius: 10)
         sphere.segmentCount = 96
         
+        // 停止并清理旧的播放器和音频会话
+        context.coordinator.cleanup()
+        
+        // 设置音频会话
+        PanoramaVideoView.activateAudioSession()
+        
         // 创建视频播放器和输出
         let asset = AVAsset(url: videoURL)
         let playerItem = AVPlayerItem(asset: asset)
@@ -181,14 +212,6 @@ struct PanoramaVideoView: UIViewRepresentable {
         let player = AVPlayer(playerItem: playerItem)
         context.coordinator.player = player
         context.coordinator.videoOutput = videoOutput
-        
-        // 设置音频会话
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback)
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            print("Failed to set audio session category: \(error)")
-        }
         
         // 设置初始音量
         player.volume = 1.0
@@ -249,10 +272,15 @@ struct PanoramaVideoView: UIViewRepresentable {
         // 添加进度观察
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         context.coordinator.progressObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
-            let duration = player.currentItem?.duration.seconds ?? 0
-            if duration > 0 {
+            let duration = playerItem.duration.seconds
+            if duration.isFinite && duration > 0 {
                 progress = time.seconds / duration
             }
+        }
+        
+        // 开始播放
+        if isPlaying {
+            player.play()
         }
         
         return sceneView
@@ -293,7 +321,7 @@ struct PanoramaVideoView: UIViewRepresentable {
             _progress = progress
             super.init()
             
-            // 添加进度更新通知观察者
+            // 添加进度控制通知观察者
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(handleSeek(_:)),
@@ -392,16 +420,7 @@ struct PanoramaVideoView: UIViewRepresentable {
         }
         
         deinit {
-            if let observer = progressObserver {
-                player?.removeTimeObserver(observer)
-            }
-            displayLink?.invalidate()
-            displayLink = nil
-            NotificationCenter.default.removeObserver(self)
-            player?.pause()
-            player = nil
-            videoOutput = nil
-            videoLayer = nil
+            cleanup()
         }
         
         // 添加进度控制方法
@@ -435,26 +454,52 @@ struct PanoramaVideoView: UIViewRepresentable {
                 player?.isMuted = isMuted
             }
         }
+        
+        func cleanup() {
+            // 停止并清理旧的播放器
+            player?.pause()
+            player?.replaceCurrentItem(with: nil)
+            player = nil
+            
+            // 清理视频输出
+            videoOutput = nil
+            videoLayer = nil
+            
+            // 清理显示链接
+            displayLink?.invalidate()
+            displayLink = nil
+            
+            // 移除所有观察者
+            if let observer = progressObserver {
+                player?.removeTimeObserver(observer)
+                progressObserver = nil
+            }
+            NotificationCenter.default.removeObserver(self)
+            
+            // 停用音频会话
+            PanoramaVideoView.deactivateAudioSession()
+        }
     }
 }
 
 // MARK: - ContentView
 struct ContentView: View {
+    @EnvironmentObject var mediaManager: PanoramaMediaManager
     @State private var selectedImage: UIImage?
     @State private var selectedVideoURL: URL?
     @State private var isImagePickerPresented = false
-    @State private var isVideoPickerPresented = false
+    @State private var isFilePickerPresented = false
     @State private var isPlaying = true
     @State private var mediaType: MediaType = .image
     @State private var showControls = false
     @State private var videoProgress: Double = 0
     @State private var orientation = UIDevice.current.orientation
     @State private var isMuted = false
+    @State private var showingOptions = false
     
-    enum MediaType {
-        case image
-        case video
-    }
+    private let columns = [
+        GridItem(.adaptive(minimum: 160), spacing: 16)
+    ]
     
     var body: some View {
         GeometryReader { geometry in
@@ -480,37 +525,74 @@ struct ContentView: View {
                             }
                         }
                         .frame(width: geometry.size.width, height: geometry.size.height)
+                        .id(videoURL)
+                        .onDisappear {
+                            // 视图消失时确保清理
+                            if mediaType == .video {
+                                PanoramaVideoView.deactivateAudioSession()
+                            }
+                        }
                     if showControls {
                         mediaControls
                     }
                 } else {
-                    VStack(spacing: 20) {
-                        Image(systemName: "photo.circle")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 100, height: 100)
-                            .foregroundColor(.gray)
-                        
-                        Button(action: {
-                            mediaType = .image
-                            isImagePickerPresented = true
-                        }) {
-                            Text("选择全景图片")
-                                .foregroundColor(.white)
-                                .padding()
-                                .background(Color.blue)
-                                .cornerRadius(10)
+                    NavigationView {
+                        Group {
+                            switch mediaManager.authorizationStatus {
+                            case .notDetermined, .restricted, .denied:
+                                VStack(spacing: 20) {
+                                    Image(systemName: "photo.circle")
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(width: 100, height: 100)
+                                        .foregroundColor(.gray)
+                                    
+                                    Text("需要访问相册权限")
+                                        .font(.headline)
+                                    
+                                    Text("请允许访问相册以查看全景照片和视频")
+                                        .font(.subheadline)
+                                        .foregroundColor(.gray)
+                                        .multilineTextAlignment(.center)
+                                        .padding(.horizontal)
+                                    
+                                    Button(action: {
+                                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                                            UIApplication.shared.open(url)
+                                        }
+                                    }) {
+                                        Text("前往设置")
+                                            .foregroundColor(.white)
+                                            .padding()
+                                            .background(Color.blue)
+                                            .cornerRadius(10)
+                                    }
+                                }
+                            case .authorized, .limited:
+                                ScrollView {
+                                    LazyVGrid(columns: columns, spacing: 16) {
+                                        ForEach(mediaManager.panoramaMedia) { media in
+                                            MediaThumbnailView(media: media) { media in
+                                                loadAndDisplayMedia(media)
+                                            }
+                                        }
+                                    }
+                                    .padding()
+                                }
+                            @unknown default:
+                                EmptyView()
+                            }
                         }
-                        
-                        Button(action: {
-                            mediaType = .video
-                            isVideoPickerPresented = true
-                        }) {
-                            Text("选择全景视频")
-                                .foregroundColor(.white)
-                                .padding()
-                                .background(Color.green)
-                                .cornerRadius(10)
+                        .navigationTitle("全景媒体库")
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                Button(action: {
+                                    showingOptions = true
+                                }) {
+                                    Image(systemName: "ellipsis.circle")
+                                        .font(.title2)
+                                }
+                            }
                         }
                     }
                 }
@@ -518,13 +600,60 @@ struct ContentView: View {
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .sheet(isPresented: $isImagePickerPresented) {
-            ImagePicker(image: $selectedImage)
+            ImagePicker(image: $selectedImage, videoURL: $selectedVideoURL)
         }
-        .sheet(isPresented: $isVideoPickerPresented) {
-            VideoPicker(videoURL: $selectedVideoURL)
+        .sheet(isPresented: $isFilePickerPresented) {
+            UnifiedFilePicker(image: $selectedImage, videoURL: $selectedVideoURL, mediaType: $mediaType)
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            orientation = UIDevice.current.orientation
+        .actionSheet(isPresented: $showingOptions) {
+            ActionSheet(
+                title: Text("选择媒体"),
+                buttons: [
+                    .default(Text("从相册选择")) {
+                        isImagePickerPresented = true
+                    },
+                    .default(Text("从文件选择")) {
+                        isFilePickerPresented = true
+                    },
+                    .cancel(Text("取消"))
+                ]
+            )
+        }
+        .onChange(of: selectedVideoURL) { _ in
+            // 重置播放状态
+            isPlaying = true
+            videoProgress = 0
+        }
+    }
+    
+    private func loadAndDisplayMedia(_ media: PanoramaMedia) {
+        // 如果当前正在播放视频，先清理
+        if mediaType == .video {
+            PanoramaVideoView.deactivateAudioSession()
+        }
+        
+        switch media.type {
+        case .image:
+            mediaManager.loadFullResolutionImage(for: media.asset) { image in
+                if let image = image {
+                    DispatchQueue.main.async {
+                        self.selectedVideoURL = nil  // 清除视频URL
+                        self.selectedImage = image
+                        self.mediaType = .image
+                    }
+                }
+            }
+        case .video:
+            mediaManager.loadVideo(for: media.asset) { url in
+                if let url = url {
+                    DispatchQueue.main.async {
+                        self.selectedImage = nil  // 清除图片
+                        self.selectedVideoURL = url
+                        self.mediaType = .video
+                        self.isPlaying = true
+                    }
+                }
+            }
         }
     }
     
@@ -533,9 +662,15 @@ struct ContentView: View {
             // 顶部返回按钮
             HStack {
                 Button(action: {
+                    if mediaType == .video {
+                        // 如果当前是视频，清理音频会话
+                        PanoramaVideoView.deactivateAudioSession()
+                    }
+                    // 清除媒体
                     selectedImage = nil
                     selectedVideoURL = nil
                     showControls = false
+                    isPlaying = false
                 }) {
                     Image(systemName: "chevron.left")
                         .font(.title2)
@@ -610,14 +745,50 @@ struct ContentView: View {
     }
 }
 
+struct MediaThumbnailView: View {
+    let media: PanoramaMedia
+    let onTap: (PanoramaMedia) -> Void
+    
+    var body: some View {
+        Button(action: {
+            onTap(media)
+        }) {
+            ZStack {
+                if let thumbnail = media.thumbnail {
+                    Image(uiImage: thumbnail)
+                        .resizable()
+                        .aspectRatio(2/1, contentMode: .fill)
+                        .frame(height: 100)
+                        .clipped()
+                        .cornerRadius(8)
+                } else {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.3))
+                        .aspectRatio(2/1, contentMode: .fill)
+                        .frame(height: 100)
+                        .cornerRadius(8)
+                }
+                
+                if media.type == .video {
+                    Image(systemName: "play.circle.fill")
+                        .font(.title)
+                        .foregroundColor(.white)
+                        .shadow(radius: 2)
+                }
+            }
+        }
+    }
+}
+
 // MARK: - ImagePicker
 struct ImagePicker: UIViewControllerRepresentable {
     @Binding var image: UIImage?
+    @Binding var videoURL: URL?  // 添加视频URL绑定
     @Environment(\.presentationMode) var presentationMode
     
     func makeUIViewController(context: Context) -> PHPickerViewController {
         var config = PHPickerConfiguration()
-        config.filter = .images
+        config.filter = .any(of: [.images, .videos])
         config.selectionLimit = 1
         
         let picker = PHPickerViewController(configuration: config)
@@ -645,100 +816,15 @@ struct ImagePicker: UIViewControllerRepresentable {
             
             if provider.canLoadObject(ofClass: UIImage.self) {
                 provider.loadObject(ofClass: UIImage.self) { image, _ in
-                    DispatchQueue.main.async {
-                        self.parent.image = image as? UIImage
+                    if let image = image as? UIImage {
+                        DispatchQueue.main.async {
+                            self.parent.image = image
+                            self.parent.videoURL = nil  // 清除可能存在的视频URL
+                        }
                     }
                 }
-            }
-        }
-    }
-}
-
-// MARK: - VideoPicker
-struct VideoPicker: View {
-    @Binding var videoURL: URL?
-    @Environment(\.presentationMode) var presentationMode
-    @State private var showingSourcePicker = true
-    @State private var showingPhotoPicker = false
-    @State private var showingFilePicker = false
-    
-    var body: some View {
-        Group {
-            if showingSourcePicker {
-                List {
-                    Button(action: {
-                        showingSourcePicker = false
-                        showingPhotoPicker = true
-                    }) {
-                        Label("从相册选择", systemImage: "photo.on.rectangle")
-                    }
-                    
-                    Button(action: {
-                        showingSourcePicker = false
-                        showingFilePicker = true
-                    }) {
-                        Label("从文件选择", systemImage: "folder")
-                    }
-                    
-                    Button(action: {
-                        presentationMode.wrappedValue.dismiss()
-                    }) {
-                        Label("取消", systemImage: "xmark.circle")
-                            .foregroundColor(.red)
-                    }
-                }
-            }
-        }
-        .sheet(isPresented: $showingPhotoPicker) {
-            PhotoVideoPicker(videoURL: $videoURL, presentationMode: presentationMode)
-        }
-        .sheet(isPresented: $showingFilePicker) {
-            FileVideoPicker(videoURL: $videoURL, presentationMode: presentationMode)
-        }
-    }
-}
-
-// MARK: - PhotoVideoPicker
-struct PhotoVideoPicker: UIViewControllerRepresentable {
-    @Binding var videoURL: URL?
-    var presentationMode: Binding<PresentationMode>
-    
-    func makeUIViewController(context: Context) -> PHPickerViewController {
-        var config = PHPickerConfiguration()
-        config.filter = .videos
-        config.selectionLimit = 1
-        
-        let picker = PHPickerViewController(configuration: config)
-        picker.delegate = context.coordinator
-        return picker
-    }
-    
-    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-    
-    class Coordinator: NSObject, PHPickerViewControllerDelegate {
-        let parent: PhotoVideoPicker
-        
-        init(_ parent: PhotoVideoPicker) {
-            self.parent = parent
-        }
-        
-        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-            guard let provider = results.first?.itemProvider else {
-                parent.presentationMode.wrappedValue.dismiss()
-                return
-            }
-            
-            if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
                 provider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { url, error in
-                    if let error = error {
-                        print("Error loading video: \(error)")
-                        return
-                    }
-                    
                     guard let url = url else { return }
                     
                     // 创建本地副本
@@ -751,9 +837,10 @@ struct PhotoVideoPicker: UIViewControllerRepresentable {
                             try FileManager.default.removeItem(at: localURL)
                         }
                         try FileManager.default.copyItem(at: url, to: localURL)
+                        
                         DispatchQueue.main.async {
                             self.parent.videoURL = localURL
-                            self.parent.presentationMode.wrappedValue.dismiss()
+                            self.parent.image = nil  // 清除可能存在的图片
                         }
                     } catch {
                         print("Error copying video file: \(error)")
@@ -764,13 +851,16 @@ struct PhotoVideoPicker: UIViewControllerRepresentable {
     }
 }
 
-// MARK: - FileVideoPicker
-struct FileVideoPicker: UIViewControllerRepresentable {
+// MARK: - UnifiedFilePicker
+struct UnifiedFilePicker: UIViewControllerRepresentable {
+    @Binding var image: UIImage?
     @Binding var videoURL: URL?
-    var presentationMode: Binding<PresentationMode>
+    @Binding var mediaType: MediaType
+    @Environment(\.presentationMode) var presentationMode
     
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.movie, UTType.video])
+        let supportedTypes: [UTType] = [.image, .movie, .video]
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: supportedTypes)
         picker.delegate = context.coordinator
         picker.allowsMultipleSelection = false
         return picker
@@ -783,20 +873,18 @@ struct FileVideoPicker: UIViewControllerRepresentable {
     }
     
     class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let parent: FileVideoPicker
+        let parent: UnifiedFilePicker
         
-        init(_ parent: FileVideoPicker) {
+        init(_ parent: UnifiedFilePicker) {
             self.parent = parent
         }
         
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
             guard let url = urls.first else { return }
             
-            // 获取对选定URL的安全访问权限
             guard url.startAccessingSecurityScopedResource() else { return }
             defer { url.stopAccessingSecurityScopedResource() }
             
-            // 创建本地副本
             let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             let uniqueFileName = UUID().uuidString + "." + url.pathExtension
             let localURL = documentsDirectory.appendingPathComponent(uniqueFileName)
@@ -806,12 +894,26 @@ struct FileVideoPicker: UIViewControllerRepresentable {
                     try FileManager.default.removeItem(at: localURL)
                 }
                 try FileManager.default.copyItem(at: url, to: localURL)
-                DispatchQueue.main.async {
-                    self.parent.videoURL = localURL
-                    self.parent.presentationMode.wrappedValue.dismiss()
+                
+                if UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true {
+                    if let image = UIImage(contentsOfFile: localURL.path) {
+                        DispatchQueue.main.async {
+                            self.parent.image = image
+                            self.parent.videoURL = nil  // 清除视频URL
+                            self.parent.mediaType = .image
+                            self.parent.presentationMode.wrappedValue.dismiss()
+                        }
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        self.parent.videoURL = localURL
+                        self.parent.image = nil  // 清除图片
+                        self.parent.mediaType = .video
+                        self.parent.presentationMode.wrappedValue.dismiss()
+                    }
                 }
             } catch {
-                print("Error copying video file: \(error)")
+                print("Error copying file: \(error)")
             }
         }
     }
