@@ -182,6 +182,17 @@ struct PanoramaVideoView: UIViewRepresentable {
         context.coordinator.player = player
         context.coordinator.videoOutput = videoOutput
         
+        // 设置音频会话
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback)
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("Failed to set audio session category: \(error)")
+        }
+        
+        // 设置初始音量
+        player.volume = 1.0
+        
         // 创建并配置材质
         let material = SCNMaterial()
         
@@ -226,11 +237,6 @@ struct PanoramaVideoView: UIViewRepresentable {
         
         // 设置视频帧更新
         context.coordinator.setupDisplayLink()
-        
-        // 开始播放
-        if isPlaying {
-            player.play()
-        }
         
         // 添加循环播放观察者
         NotificationCenter.default.addObserver(
@@ -292,6 +298,22 @@ struct PanoramaVideoView: UIViewRepresentable {
                 self,
                 selector: #selector(handleSeek(_:)),
                 name: NSNotification.Name("seekVideo"),
+                object: nil
+            )
+            
+            // 添加音量控制通知观察者
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(handleVolumeChange(_:)),
+                name: NSNotification.Name("volumeChanged"),
+                object: nil
+            )
+            
+            // 添加静音切换通知观察者
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(handleMuteToggle(_:)),
+                name: NSNotification.Name("toggleMute"),
                 object: nil
             )
         }
@@ -401,6 +423,18 @@ struct PanoramaVideoView: UIViewRepresentable {
                 }
             }
         }
+        
+        @objc func handleVolumeChange(_ notification: Notification) {
+            if let volume = notification.userInfo?["volume"] as? Double {
+                player?.volume = Float(volume)
+            }
+        }
+        
+        @objc func handleMuteToggle(_ notification: Notification) {
+            if let isMuted = notification.userInfo?["isMuted"] as? Bool {
+                player?.isMuted = isMuted
+            }
+        }
     }
 }
 
@@ -415,6 +449,7 @@ struct ContentView: View {
     @State private var showControls = false
     @State private var videoProgress: Double = 0
     @State private var orientation = UIDevice.current.orientation
+    @State private var isMuted = false
     
     enum MediaType {
         case image
@@ -517,35 +552,47 @@ struct ContentView: View {
             
             // 底部控制栏
             if mediaType == .video {
-                VStack(spacing: 8) {
-                    // 进度条和控制按钮在同一行
-                    HStack(spacing: 12) {
-                        // 播放/暂停按钮
-                        Button(action: {
-                            isPlaying.toggle()
-                        }) {
-                            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                .resizable()
-                                .frame(width: 32, height: 32)
-                                .foregroundColor(.white)
-                        }
-                        
-                        // 视频进度条
-                        Slider(value: $videoProgress, in: 0...1, onEditingChanged: { editing in
-                            if !editing {
-                                // 当用户完成拖动时，发送通知更新视频位置
-                                NotificationCenter.default.post(
-                                    name: NSNotification.Name("seekVideo"),
-                                    object: nil,
-                                    userInfo: ["progress": videoProgress]
-                                )
-                            }
-                        })
-                        .accentColor(.white)
+                HStack(spacing: 12) {
+                    // 播放/暂停按钮
+                    Button(action: {
+                        isPlaying.toggle()
+                    }) {
+                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                            .font(.title2)
+                            .foregroundColor(.white)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
+                    
+                    // 进度条
+                    Slider(value: $videoProgress)
+                        .accentColor(.white)
+                        .onChange(of: videoProgress) { newValue in
+                            NotificationCenter.default.post(
+                                name: NSNotification.Name("seekVideo"),
+                                object: nil,
+                                userInfo: ["progress": newValue]
+                            )
+                        }
+                    
+                    // 静音按钮
+                    Button(action: {
+                        isMuted.toggle()
+                        NotificationCenter.default.post(
+                            name: NSNotification.Name("toggleMute"),
+                            object: nil,
+                            userInfo: ["isMuted": isMuted]
+                        )
+                    }) {
+                        Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.title2)
+                            .foregroundColor(.white)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
                 }
+                .padding(.horizontal)
+                .padding(.vertical, 10)
                 .background(Color.black.opacity(0.5))
             }
         }
