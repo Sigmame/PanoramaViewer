@@ -120,7 +120,7 @@ struct PanoramaView: UIViewRepresentable {
                 // 先应用垂直旋转，再应用水平旋转
                 var transform = SCNMatrix4Identity
                 transform = SCNMatrix4Rotate(transform, currentRotationX, 0, 1, 0)  // 水平旋转
-                transform = SCNMatrix4Rotate(transform, -currentRotationY, 1, 0, 0) // 垂直旋转（注意负号）
+                transform = SCNMatrix4Rotate(transform, currentRotationY, 1, 0, 0)  // 垂直旋转（移除负号）
                 
                 // 应用旋转
                 cameraNode.transform = transform
@@ -376,7 +376,7 @@ struct PanoramaVideoView: UIViewRepresentable {
                 // 先应用垂直旋转，再应用水平旋转
                 var transform = SCNMatrix4Identity
                 transform = SCNMatrix4Rotate(transform, currentRotationX, 0, 1, 0)  // 水平旋转
-                transform = SCNMatrix4Rotate(transform, -currentRotationY, 1, 0, 0) // 垂直旋转（注意负号）
+                transform = SCNMatrix4Rotate(transform, currentRotationY, 1, 0, 0)  // 垂直旋转（移除负号）
                 
                 // 应用旋转
                 cameraNode.transform = transform
