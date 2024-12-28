@@ -152,7 +152,8 @@ extension SCNQuaternion {
 struct PanoramaVideoView: UIViewRepresentable {
     let videoURL: URL
     @Binding var isPlaying: Bool
-    @Binding var progress: Double
+    @Binding var coordinator: Coordinator?
+    @Binding var isMuted: Bool
     
     static var activeAudioSession: Bool = false
     
@@ -181,6 +182,7 @@ struct PanoramaVideoView: UIViewRepresentable {
     
     func makeUIView(context: Context) -> SCNView {
         let sceneView = SCNView()
+        coordinator = context.coordinator
         let scene = SCNScene()
         
         // 创建相机节点
@@ -213,8 +215,8 @@ struct PanoramaVideoView: UIViewRepresentable {
         context.coordinator.player = player
         context.coordinator.videoOutput = videoOutput
         
-        // 设置初始音量
-        player.volume = 1.0
+        // 设置初始静音状态
+        player.isMuted = isMuted
         
         // 创建并配置材质
         let material = SCNMaterial()
@@ -269,15 +271,6 @@ struct PanoramaVideoView: UIViewRepresentable {
             object: playerItem
         )
         
-        // 添加进度观察
-        let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        context.coordinator.progressObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
-            let duration = playerItem.duration.seconds
-            if duration.isFinite && duration > 0 {
-                progress = time.seconds / duration
-            }
-        }
-        
         // 开始播放
         if isPlaying {
             player.play()
@@ -287,15 +280,19 @@ struct PanoramaVideoView: UIViewRepresentable {
     }
     
     func updateUIView(_ scnView: SCNView, context: Context) {
+        // 更新播放状态
         if isPlaying {
             context.coordinator.player?.play()
         } else {
             context.coordinator.player?.pause()
         }
+        
+        // 更新静音状态
+        context.coordinator.player?.isMuted = isMuted
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(isPlaying: $isPlaying, progress: $progress)
+        Coordinator(isPlaying: $isPlaying, isMuted: $isMuted)
     }
     
     class Coordinator: NSObject {
@@ -303,71 +300,22 @@ struct PanoramaVideoView: UIViewRepresentable {
         var videoOutput: AVPlayerItemVideoOutput?
         var videoLayer: CALayer?
         var displayLink: CADisplayLink?
-        var progressObserver: Any?
         @Binding var isPlaying: Bool
-        @Binding var progress: Double
+        @Binding var isMuted: Bool
         private var previousX: Float = 0
         private var previousY: Float = 0
         private var currentRotationX: Float = 0
         private var currentRotationY: Float = 0
         weak var cameraNode: SCNNode?
-        private var wasPlayingBeforeSeek: Bool = false
         
         // 角度限制
         private let maxVerticalAngle: Float = .pi / 2  // 90度
         private let minVerticalAngle: Float = -.pi / 2 // -90度
         
-        init(isPlaying: Binding<Bool>, progress: Binding<Double>) {
+        init(isPlaying: Binding<Bool>, isMuted: Binding<Bool>) {
             _isPlaying = isPlaying
-            _progress = progress
+            _isMuted = isMuted
             super.init()
-            
-            // 添加进度控制通知观察者
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(handleSeek(_:)),
-                name: NSNotification.Name("seekVideo"),
-                object: nil
-            )
-            
-            // 添加静音切换通知观察者
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(handleMuteToggle(_:)),
-                name: NSNotification.Name("toggleMute"),
-                object: nil
-            )
-        }
-        
-        @objc func handleSeek(_ notification: Notification) {
-            if let progress = notification.userInfo?["progress"] as? Double {
-                seek(to: progress)
-            }
-        }
-        
-        func seek(to progress: Double) {
-            guard let player = player,
-                  let duration = player.currentItem?.duration else { return }
-            
-            let time = CMTime(seconds: duration.seconds * progress, preferredTimescale: duration.timescale)
-            // 暂停当前播放
-            player.pause()
-            
-            // 使用精确跳转
-            player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                if finished {
-                    // 如果之前是播放状态，则恢复播放
-                    if self?.isPlaying == true {
-                        player.play()
-                    }
-                }
-            }
-        }
-        
-        @objc func handleMuteToggle(_ notification: Notification) {
-            if let isMuted = notification.userInfo?["isMuted"] as? Bool {
-                player?.isMuted = isMuted
-            }
         }
         
         func setupDisplayLink() {
@@ -422,7 +370,7 @@ struct PanoramaVideoView: UIViewRepresentable {
                 // 先应用垂直旋转，再应用水平旋转
                 var transform = SCNMatrix4Identity
                 transform = SCNMatrix4Rotate(transform, currentRotationX, 0, 1, 0)  // 水平旋转
-                transform = SCNMatrix4Rotate(transform, currentRotationY, 1, 0, 0)  // 垂直旋转（移除负号）
+                transform = SCNMatrix4Rotate(transform, currentRotationY, 1, 0, 0)  // 垂直旋转
                 
                 // 应用旋转
                 cameraNode.transform = transform
@@ -430,7 +378,6 @@ struct PanoramaVideoView: UIViewRepresentable {
                 previousX = currentX
                 previousY = currentY
             case .ended:
-                // 保存最终角度
                 break
             default:
                 break
@@ -455,11 +402,6 @@ struct PanoramaVideoView: UIViewRepresentable {
             displayLink?.invalidate()
             displayLink = nil
             
-            // 移除所有观察者
-            if let observer = progressObserver {
-                player?.removeTimeObserver(observer)
-                progressObserver = nil
-            }
             NotificationCenter.default.removeObserver(self)
             
             // 停用音频会话
@@ -478,10 +420,10 @@ struct ContentView: View {
     @State private var isPlaying = true
     @State private var mediaType: MediaType = .image
     @State private var showControls = false
-    @State private var videoProgress: Double = 0
     @State private var orientation = UIDevice.current.orientation
-    @State private var isMuted = false
     @State private var showingOptions = false
+    @State private var videoCoordinator: PanoramaVideoView.Coordinator?
+    @State private var isMuted = false  // 添加静音状态
     
     private let columns = [
         GridItem(.adaptive(minimum: 160), spacing: 16)
@@ -503,7 +445,10 @@ struct ContentView: View {
                         mediaControls
                     }
                 } else if let videoURL = selectedVideoURL, mediaType == .video {
-                    PanoramaVideoView(videoURL: videoURL, isPlaying: $isPlaying, progress: $videoProgress)
+                    PanoramaVideoView(videoURL: videoURL, 
+                                    isPlaying: $isPlaying, 
+                                    coordinator: $videoCoordinator,
+                                    isMuted: $isMuted)
                         .ignoresSafeArea()
                         .onTapGesture {
                             withAnimation {
@@ -513,7 +458,7 @@ struct ContentView: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .id(videoURL)
                         .onDisappear {
-                            // 视图消失确保清理
+                            // 视图消失时保清理
                             if mediaType == .video {
                                 PanoramaVideoView.deactivateAudioSession()
                             }
@@ -608,7 +553,6 @@ struct ContentView: View {
         .onChange(of: selectedVideoURL) { _ in
             // 重置播放状态
             isPlaying = true
-            videoProgress = 0
         }
     }
     
@@ -685,35 +629,12 @@ struct ContentView: View {
                             .contentShape(Rectangle())
                     }
                     
-                    // 进度条
-                    GeometryReader { geometry in
-                        Slider(value: $videoProgress, onEditingChanged: { editing in
-                            if editing {
-                                // 开始拖动时暂停播放器
-                                isPlaying = false
-                            } else {
-                                // 结束拖动时发送跳转通知
-                                NotificationCenter.default.post(
-                                    name: NSNotification.Name("seekVideo"),
-                                    object: nil,
-                                    userInfo: ["progress": videoProgress]
-                                )
-                                // 恢复播放
-                                isPlaying = true
-                            }
-                        })
-                        .accentColor(.white)
-                    }
-                    .frame(height: 44)
+                    Spacer()
                     
                     // 静音按钮
                     Button(action: {
                         isMuted.toggle()
-                        NotificationCenter.default.post(
-                            name: NSNotification.Name("toggleMute"),
-                            object: nil,
-                            userInfo: ["isMuted": isMuted]
-                        )
+                        videoCoordinator?.player?.isMuted = isMuted
                     }) {
                         Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                             .font(.title2)
