@@ -478,38 +478,29 @@ struct PanoramaVideoView: UIViewRepresentable {
             
             print("🎯 Seek: Starting")
             print("  - Target progress: \(targetProgress)")
-            print("  - Current time: \(player.currentTime().seconds)")
-            print("  - Duration: \(duration.seconds)")
             
             // 标记seek开始
             isSeekInProgress = true
             
+            // 记录当前是否正在播放
+            let wasPlaying = isPlaying
+            
             // 暂停播放和进度更新
-            let wasPlaying = player.rate != 0
             player.pause()
             
             let time = CMTime(seconds: duration.seconds * targetProgress, preferredTimescale: duration.timescale)
-            print("  ✓ Calculated target time: \(time.seconds)")
             
             // 使用精确跳转
             player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                guard let self = self else {
-                    print("⚠️ Seek: Self is nil in completion handler")
-                    return
-                }
+                guard let self = self else { return }
                 
                 DispatchQueue.main.async {
                     if finished {
-                        print("✅ Seek: Completed successfully")
-                        print("  - Setting progress to: \(targetProgress)")
-                        print("  - Was playing: \(wasPlaying)")
-                        
                         // 更新进度状态
                         self.progress = targetProgress
                         
                         // 如果之前是播放状态，恢复播放
                         if wasPlaying {
-                            print("  ✓ Resuming playback")
                             self.isPlaying = true
                             player.play()
                         }
@@ -517,17 +508,10 @@ struct PanoramaVideoView: UIViewRepresentable {
                         // 重置状态标记
                         self.isSeekInProgress = false
                         self.isScrubbing = false
-                        
-                        print("  ✓ Final state:")
-                        print("    - progress: \(self.progress)")
-                        print("    - isSeekInProgress: \(self.isSeekInProgress)")
-                        print("    - isScrubbing: \(self.isScrubbing)")
                     } else {
-                        print("❌ Seek: Failed")
                         // seek失败时也要重置状态
                         self.isSeekInProgress = false
                         self.isScrubbing = false
-                        print("  ✓ Reset state after failure")
                     }
                 }
             }
@@ -782,10 +766,10 @@ struct ContentView: View {
                             // 开始拖动时暂停播放和进度更新
                             coordinator.isScrubbing = true
                             coordinator.player?.pause()
-                            isPlaying = false
                         } else {
-                            // 拖动结束后跳转到新位置
+                            // 拖动结束后跳转到新位置，并保持原来的播放状态
                             coordinator.seek(to: videoProgress)
+                            // 不改变 isPlaying 状态，让 seek 完成后自动恢复播放
                         }
                     })
                     .onChange(of: videoProgress) { newValue in
