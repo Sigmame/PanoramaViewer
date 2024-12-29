@@ -152,11 +152,12 @@ extension SCNQuaternion {
 struct PanoramaVideoView: UIViewRepresentable {
     let videoURL: URL
     @Binding var isPlaying: Bool
-    @Binding var coordinator: Coordinator?
     @Binding var isMuted: Bool
     @Binding var progress: Double
     
-    static var activeAudioSession: Bool = false
+    // 改为 internal 访问级别，并使用 weak 引用
+    static weak var activeCoordinator: Coordinator?
+    private static var activeAudioSession: Bool = false
     
     static func deactivateAudioSession() {
         if activeAudioSession {
@@ -167,6 +168,9 @@ struct PanoramaVideoView: UIViewRepresentable {
                 print("Failed to deactivate audio session: \(error)")
             }
         }
+        // 清理 coordinator
+        activeCoordinator?.cleanup()
+        activeCoordinator = nil
     }
     
     static func activateAudioSession() {
@@ -182,8 +186,19 @@ struct PanoramaVideoView: UIViewRepresentable {
     }
     
     func makeUIView(context: Context) -> SCNView {
+        print("📱 Making new SCNView")
         let sceneView = SCNView()
-        coordinator = context.coordinator
+        
+        // 创建并保存新的 coordinator
+        let newCoordinator = context.coordinator
+        
+        // 如果存在旧的 coordinator，先清理
+        if Self.activeCoordinator !== newCoordinator {
+            Self.activeCoordinator?.cleanup()
+            Self.activeCoordinator = newCoordinator
+            print("🎮 Set new active coordinator: \(String(describing: newCoordinator))")
+        }
+        
         let scene = SCNScene()
         
         // 创建相机节点
@@ -195,10 +210,6 @@ struct PanoramaVideoView: UIViewRepresentable {
         // 创建球体
         let sphere = SCNSphere(radius: 10)
         sphere.segmentCount = 96
-        
-        // 停止并清理旧的播放器和音频会话
-        let coordinator = context.coordinator
-        coordinator.cleanup()
         
         // 设置音频会话
         PanoramaVideoView.activateAudioSession()
@@ -214,26 +225,37 @@ struct PanoramaVideoView: UIViewRepresentable {
         playerItem.add(videoOutput)
         
         let player = AVPlayer(playerItem: playerItem)
-        coordinator.player = player
-        coordinator.videoOutput = videoOutput
+        newCoordinator.player = player
+        newCoordinator.videoOutput = videoOutput
         
         // 设置初始静音状态
         player.isMuted = isMuted
         
         // 添加进度观察者
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        coordinator.progressObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak player] time in
+        let progressObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak player] time in
             guard let player = player,
-                  !coordinator.isScrubbing else { return }
+                  let coordinator = Self.activeCoordinator else {
+                print("⚠️ Observer: Player or coordinator is nil")
+                return
+            }
+            
+            // 如果正在拖动或跳转中，不更新进度
+            if coordinator.isScrubbing || coordinator.isSeekInProgress {
+                print("⏭️ Observer: Skip update")
+                return
+            }
             
             // 只在播放时更新进度
             if player.rate != 0,
                let duration = player.currentItem?.duration,
                duration.isValid,
                duration.seconds > 0 {
-                coordinator.progress = time.seconds / duration.seconds
+                let currentProgress = time.seconds / duration.seconds
+                coordinator.progress = currentProgress
             }
         }
+        newCoordinator.progressObserver = progressObserver
         
         // 创建并配置材质
         let material = SCNMaterial()
@@ -270,19 +292,19 @@ struct PanoramaVideoView: UIViewRepresentable {
         sceneView.allowsCameraControl = false
         
         // 配置手势
-        let panGesture = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.handlePan(_:)))
+        let panGesture = UIPanGestureRecognizer(target: newCoordinator, action: #selector(Coordinator.handlePan(_:)))
         sceneView.addGestureRecognizer(panGesture)
         
         // 保存相机节点引用和视频层
-        coordinator.cameraNode = cameraNode
-        coordinator.videoLayer = videoLayer
+        newCoordinator.cameraNode = cameraNode
+        newCoordinator.videoLayer = videoLayer
         
         // 设置视频帧更新
-        coordinator.setupDisplayLink()
+        newCoordinator.setupDisplayLink()
         
         // 添加循环播放观察者
         NotificationCenter.default.addObserver(
-            coordinator,
+            newCoordinator,
             selector: #selector(Coordinator.playerDidFinishPlaying),
             name: .AVPlayerItemDidPlayToEndTime,
             object: playerItem
@@ -298,18 +320,20 @@ struct PanoramaVideoView: UIViewRepresentable {
     
     func updateUIView(_ scnView: SCNView, context: Context) {
         // 更新播放状态
-        if isPlaying {
-            context.coordinator.player?.play()
-        } else {
-            context.coordinator.player?.pause()
+        if let player = context.coordinator.player {
+            if isPlaying && player.rate == 0 {
+                player.play()
+            } else if !isPlaying && player.rate != 0 {
+                player.pause()
+            }
+            player.isMuted = isMuted
         }
-        
-        // 更新静音状态
-        context.coordinator.player?.isMuted = isMuted
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(isPlaying: $isPlaying, isMuted: $isMuted, progress: $progress)
+        print("🎮 Making new coordinator")
+        let coordinator = Coordinator(isPlaying: $isPlaying, isMuted: $isMuted, progress: $progress)
+        return coordinator
     }
     
     class Coordinator: NSObject {
@@ -318,7 +342,8 @@ struct PanoramaVideoView: UIViewRepresentable {
         var videoLayer: CALayer?
         var displayLink: CADisplayLink?
         var progressObserver: Any?
-        var isScrubbing: Bool = false  // 添加拖拽状态标记
+        var isScrubbing: Bool = false
+        var isSeekInProgress: Bool = false
         @Binding var isPlaying: Bool
         @Binding var isMuted: Bool
         @Binding var progress: Double
@@ -328,15 +353,48 @@ struct PanoramaVideoView: UIViewRepresentable {
         private var currentRotationY: Float = 0
         weak var cameraNode: SCNNode?
         
-        // 角度限制
-        private let maxVerticalAngle: Float = .pi / 2  // 90度
-        private let minVerticalAngle: Float = -.pi / 2 // -90度
+        private let maxVerticalAngle: Float = .pi / 2
+        private let minVerticalAngle: Float = -.pi / 2
         
         init(isPlaying: Binding<Bool>, isMuted: Binding<Bool>, progress: Binding<Double>) {
             _isPlaying = isPlaying
             _isMuted = isMuted
             _progress = progress
             super.init()
+            print("🎮 Coordinator initialized")
+        }
+        
+        deinit {
+            print("🎮 Coordinator deinit")
+            cleanup()
+        }
+        
+        func cleanup() {
+            print("🎮 Cleanup started")
+            // 停止播放器
+            player?.pause()
+            player?.replaceCurrentItem(with: nil)
+            
+            // 移除进度观察者
+            if let observer = progressObserver {
+                player?.removeTimeObserver(observer)
+                progressObserver = nil
+            }
+            
+            // 停止显示链接
+            displayLink?.invalidate()
+            displayLink = nil
+            
+            // 移除通知观察者
+            NotificationCenter.default.removeObserver(self)
+            
+            // 清理引用
+            player = nil
+            videoOutput = nil
+            videoLayer = nil
+            cameraNode = nil
+            
+            print("🎮 Cleanup completed")
         }
         
         func setupDisplayLink() {
@@ -405,55 +463,71 @@ struct PanoramaVideoView: UIViewRepresentable {
             }
         }
         
-        deinit {
-            cleanup()
-        }
-        
-        func cleanup() {
-            // 停止并清理旧的播放器
-            player?.pause()
-            player?.replaceCurrentItem(with: nil)
-            
-            // 移除进度观察者
-            if let observer = progressObserver {
-                player?.removeTimeObserver(observer)
-                progressObserver = nil
+        // 添加进度控制方法
+        func seek(to targetProgress: Double) {
+            guard let player = player,
+                  let duration = player.currentItem?.duration,
+                  duration.isValid,
+                  duration.seconds > 0,
+                  !isSeekInProgress else {
+                print("⚠️ Seek: Invalid state")
+                print("  - isSeekInProgress: \(isSeekInProgress)")
+                print("  - player: \(String(describing: player))")
+                return
             }
             
-            player = nil
-            videoOutput = nil
-            videoLayer = nil
-            displayLink?.invalidate()
-            displayLink = nil
-            NotificationCenter.default.removeObserver(self)
-            PanoramaVideoView.deactivateAudioSession()
-        }
-        
-        // 添加进度控制方法
-        func seek(to progress: Double) {
-            guard let player = player,
-                  let duration = player.currentItem?.duration else { return }
+            print("🎯 Seek: Starting")
+            print("  - Target progress: \(targetProgress)")
+            print("  - Current time: \(player.currentTime().seconds)")
+            print("  - Duration: \(duration.seconds)")
+            
+            // 标记seek开始
+            isSeekInProgress = true
             
             // 暂停播放和进度更新
+            let wasPlaying = player.rate != 0
             player.pause()
             
-            let time = CMTime(seconds: duration.seconds * progress, preferredTimescale: duration.timescale)
+            let time = CMTime(seconds: duration.seconds * targetProgress, preferredTimescale: duration.timescale)
+            print("  ✓ Calculated target time: \(time.seconds)")
             
             // 使用精确跳转
             player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                guard let self = self else { return }
-                if finished {
-                    // 更新进度状态
-                    self.progress = progress
-                    
-                    // 恢复播放
-                    if self.isPlaying {
-                        player.play()
-                    }
-                    
-                    // 延迟重置拖拽状态，确保进度更新已完成
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                guard let self = self else {
+                    print("⚠️ Seek: Self is nil in completion handler")
+                    return
+                }
+                
+                DispatchQueue.main.async {
+                    if finished {
+                        print("✅ Seek: Completed successfully")
+                        print("  - Setting progress to: \(targetProgress)")
+                        print("  - Was playing: \(wasPlaying)")
+                        
+                        // 更新进度状态
+                        self.progress = targetProgress
+                        
+                        // 如果之前是播放状态，恢复播放
+                        if wasPlaying {
+                            print("  ✓ Resuming playback")
+                            self.isPlaying = true
+                            player.play()
+                        }
+                        
+                        // 重置状态标记
+                        self.isSeekInProgress = false
                         self.isScrubbing = false
+                        
+                        print("  ✓ Final state:")
+                        print("    - progress: \(self.progress)")
+                        print("    - isSeekInProgress: \(self.isSeekInProgress)")
+                        print("    - isScrubbing: \(self.isScrubbing)")
+                    } else {
+                        print("❌ Seek: Failed")
+                        // seek失败时也要重置状态
+                        self.isSeekInProgress = false
+                        self.isScrubbing = false
+                        print("  ✓ Reset state after failure")
                     }
                 }
             }
@@ -504,7 +578,6 @@ struct ContentView: View {
                 } else if let videoURL = selectedVideoURL, mediaType == .video {
                     PanoramaVideoView(videoURL: videoURL, 
                                     isPlaying: $isPlaying, 
-                                    coordinator: $videoCoordinator,
                                     isMuted: $isMuted,
                                     progress: $videoProgress)
                         .ignoresSafeArea()
@@ -700,7 +773,10 @@ struct ContentView: View {
                     
                     // 进度条
                     Slider(value: $videoProgress, in: 0...1, onEditingChanged: { editing in
-                        guard let coordinator = videoCoordinator else { return }
+                        guard let coordinator = PanoramaVideoView.activeCoordinator else {
+                            print("⚠️ Slider: coordinator is nil")
+                            return
+                        }
                         
                         if editing {
                             // 开始拖动时暂停播放和进度更新
@@ -710,9 +786,14 @@ struct ContentView: View {
                         } else {
                             // 拖动结束后跳转到新位置
                             coordinator.seek(to: videoProgress)
-                            // 注意：不在这里设置 isScrubbing = false，而是在 seek 完成后设置
                         }
                     })
+                    .onChange(of: videoProgress) { newValue in
+                        if let coordinator = PanoramaVideoView.activeCoordinator,
+                           !coordinator.isScrubbing && !coordinator.isSeekInProgress {
+                            coordinator.seek(to: newValue)
+                        }
+                    }
                     .accentColor(.white)
                     
                     // 静音按钮
