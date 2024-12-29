@@ -526,14 +526,14 @@ struct ContentView: View {
     @State private var selectedVideoURL: URL?
     @State private var isImagePickerPresented = false
     @State private var isFilePickerPresented = false
-    @State private var isPlaying = true
+    @State private var isPlaying = false  // 初始状态设为 false
     @State private var mediaType: MediaType = .image
     @State private var showControls = false
     @State private var orientation = UIDevice.current.orientation
     @State private var showingOptions = false
     @State private var videoCoordinator: PanoramaVideoView.Coordinator?
     @State private var isMuted = false
-    @State private var videoProgress: Double = 0  // 添加进度状态
+    @State private var videoProgress: Double = 0
     
     @Environment(\.verticalSizeClass) var verticalSizeClass
     
@@ -571,9 +571,17 @@ struct ContentView: View {
                             }
                         }
                         .frame(width: geometry.size.width, height: geometry.size.height)
-                        .id(videoURL)
+                        .id(videoURL)  // 确保 URL 变化时重新创建视图
+                        .onAppear {
+                            print("🎥 Video view appeared")
+                            // 延迟一下再开始播放
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                isPlaying = true
+                            }
+                        }
                         .onDisappear {
-                            // 视图消失时保清理
+                            print("🎥 Video view disappeared")
+                            isPlaying = false
                             if mediaType == .video {
                                 PanoramaVideoView.deactivateAudioSession()
                             }
@@ -651,7 +659,7 @@ struct ContentView: View {
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .sheet(isPresented: $isImagePickerPresented) {
-            ImagePicker(image: $selectedImage, videoURL: $selectedVideoURL)
+            ImagePicker(image: $selectedImage, videoURL: $selectedVideoURL, mediaType: $mediaType)
         }
         .sheet(isPresented: $isFilePickerPresented) {
             UnifiedFilePicker(image: $selectedImage, videoURL: $selectedVideoURL, mediaType: $mediaType)
@@ -848,13 +856,15 @@ struct MediaThumbnailView: View {
 // MARK: - ImagePicker
 struct ImagePicker: UIViewControllerRepresentable {
     @Binding var image: UIImage?
-    @Binding var videoURL: URL?  // 添加视频URL绑定
+    @Binding var videoURL: URL?
+    @Binding var mediaType: MediaType
     @Environment(\.presentationMode) var presentationMode
     
     func makeUIViewController(context: Context) -> PHPickerViewController {
         var config = PHPickerConfiguration()
         config.filter = .any(of: [.images, .videos])
         config.selectionLimit = 1
+        config.preferredAssetRepresentationMode = .current
         
         let picker = PHPickerViewController(configuration: config)
         picker.delegate = context.coordinator
@@ -877,10 +887,11 @@ struct ImagePicker: UIViewControllerRepresentable {
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
             parent.presentationMode.wrappedValue.dismiss()
             
-            guard let provider = results.first?.itemProvider else { return }
+            guard let result = results.first else { return }
             
-            if provider.canLoadObject(ofClass: UIImage.self) {
-                provider.loadObject(ofClass: UIImage.self) { image, _ in
+            // 处理图片
+            if result.itemProvider.canLoadObject(ofClass: UIImage.self) {
+                result.itemProvider.loadObject(ofClass: UIImage.self) { image, _ in
                     if let image = image as? UIImage {
                         DispatchQueue.main.async {
                             // 如果之前在播放视频，先清理音频会话
@@ -889,34 +900,83 @@ struct ImagePicker: UIViewControllerRepresentable {
                             }
                             self.parent.videoURL = nil  // 清除视频URL
                             self.parent.image = image
+                            self.parent.mediaType = .image
                         }
                     }
                 }
-            } else if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
-                provider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { url, error in
-                    guard let url = url else { return }
+            }
+            // 处理视频
+            else if result.itemProvider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
+                // 先清理现有的视频资源
+                if self.parent.videoURL != nil {
+                    PanoramaVideoView.deactivateAudioSession()
+                }
+                
+                // 使用 assetIdentifier 获取 PHAsset
+                if let identifier = result.assetIdentifier,
+                   let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject {
+                    // 使用 PHImageManager 获取视频 URL
+                    let options = PHVideoRequestOptions()
+                    options.version = .current
+                    options.deliveryMode = .highQualityFormat
+                    options.isNetworkAccessAllowed = true  // 允许从 iCloud 下载
                     
-                    // 创建本地副本
-                    let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                    let uniqueFileName = UUID().uuidString + "." + url.pathExtension
-                    let localURL = documentsDirectory.appendingPathComponent(uniqueFileName)
-                    
-                    do {
-                        if FileManager.default.fileExists(atPath: localURL.path) {
-                            try FileManager.default.removeItem(at: localURL)
+                    PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { avAsset, _, _ in
+                        guard let urlAsset = avAsset as? AVURLAsset else { 
+                            print("❌ Failed to get URL asset")
+                            return 
                         }
-                        try FileManager.default.copyItem(at: url, to: localURL)
                         
-                        DispatchQueue.main.async {
-                            // 如果之前在播放视频，先清理音频会话
-                            if self.parent.videoURL != nil {
-                                PanoramaVideoView.deactivateAudioSession()
+                        // 创建本地副本
+                        let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                        let uniqueFileName = UUID().uuidString + ".mov"
+                        let localURL = documentsDirectory.appendingPathComponent(uniqueFileName)
+                        
+                        do {
+                            if FileManager.default.fileExists(atPath: localURL.path) {
+                                try FileManager.default.removeItem(at: localURL)
                             }
-                            self.parent.image = nil  // 清除图片
-                            self.parent.videoURL = localURL
+                            try FileManager.default.copyItem(at: urlAsset.url, to: localURL)
+                            
+                            DispatchQueue.main.async {
+                                print("🎥 Video loaded successfully")
+                                self.parent.image = nil  // 清除图片
+                                self.parent.videoURL = localURL
+                                self.parent.mediaType = .video  // 设置媒体类型为视频
+                            }
+                        } catch {
+                            print("❌ Error copying video file: \(error)")
                         }
-                    } catch {
-                        print("Error copying video file: \(error)")
+                    }
+                } else {
+                    print("⚠️ Fallback to direct file loading")
+                    // 如果无法获取 assetIdentifier，回退到直接加载文件
+                    result.itemProvider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { url, error in
+                        guard let url = url else { 
+                            print("❌ Failed to get URL from file representation")
+                            return 
+                        }
+                        
+                        // 创建本地副本
+                        let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                        let uniqueFileName = UUID().uuidString + "." + url.pathExtension
+                        let localURL = documentsDirectory.appendingPathComponent(uniqueFileName)
+                        
+                        do {
+                            if FileManager.default.fileExists(atPath: localURL.path) {
+                                try FileManager.default.removeItem(at: localURL)
+                            }
+                            try FileManager.default.copyItem(at: url, to: localURL)
+                            
+                            DispatchQueue.main.async {
+                                print("🎥 Video loaded successfully (fallback)")
+                                self.parent.image = nil  // 清除图片
+                                self.parent.videoURL = localURL
+                                self.parent.mediaType = .video  // 设置媒体类型为视频
+                            }
+                        } catch {
+                            print("❌ Error copying video file: \(error)")
+                        }
                     }
                 }
             }
