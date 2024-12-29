@@ -197,7 +197,8 @@ struct PanoramaVideoView: UIViewRepresentable {
         sphere.segmentCount = 96
         
         // 停止并清理旧的播放器和音频会话
-        context.coordinator.cleanup()
+        let coordinator = context.coordinator
+        coordinator.cleanup()
         
         // 设置音频会话
         PanoramaVideoView.activateAudioSession()
@@ -213,21 +214,24 @@ struct PanoramaVideoView: UIViewRepresentable {
         playerItem.add(videoOutput)
         
         let player = AVPlayer(playerItem: playerItem)
-        context.coordinator.player = player
-        context.coordinator.videoOutput = videoOutput
+        coordinator.player = player
+        coordinator.videoOutput = videoOutput
         
         // 设置初始静音状态
         player.isMuted = isMuted
         
         // 添加进度观察者
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        context.coordinator.progressObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
-            let duration = playerItem.duration
-            if duration.isValid {
-                let durationSeconds = CMTimeGetSeconds(duration)
-                if durationSeconds > 0 {
-                    progress = time.seconds / durationSeconds
-                }
+        coordinator.progressObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak player] time in
+            guard let player = player,
+                  !coordinator.isScrubbing else { return }
+            
+            // 只在播放时更新进度
+            if player.rate != 0,
+               let duration = player.currentItem?.duration,
+               duration.isValid,
+               duration.seconds > 0 {
+                coordinator.progress = time.seconds / duration.seconds
             }
         }
         
@@ -266,19 +270,19 @@ struct PanoramaVideoView: UIViewRepresentable {
         sceneView.allowsCameraControl = false
         
         // 配置手势
-        let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        let panGesture = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.handlePan(_:)))
         sceneView.addGestureRecognizer(panGesture)
         
         // 保存相机节点引用和视频层
-        context.coordinator.cameraNode = cameraNode
-        context.coordinator.videoLayer = videoLayer
+        coordinator.cameraNode = cameraNode
+        coordinator.videoLayer = videoLayer
         
         // 设置视频帧更新
-        context.coordinator.setupDisplayLink()
+        coordinator.setupDisplayLink()
         
         // 添加循环播放观察者
         NotificationCenter.default.addObserver(
-            context.coordinator,
+            coordinator,
             selector: #selector(Coordinator.playerDidFinishPlaying),
             name: .AVPlayerItemDidPlayToEndTime,
             object: playerItem
@@ -313,7 +317,8 @@ struct PanoramaVideoView: UIViewRepresentable {
         var videoOutput: AVPlayerItemVideoOutput?
         var videoLayer: CALayer?
         var displayLink: CADisplayLink?
-        var progressObserver: Any?  // 添加进度观察者属性
+        var progressObserver: Any?
+        var isScrubbing: Bool = false  // 添加拖拽状态标记
         @Binding var isPlaying: Bool
         @Binding var isMuted: Bool
         @Binding var progress: Double
@@ -429,18 +434,26 @@ struct PanoramaVideoView: UIViewRepresentable {
             guard let player = player,
                   let duration = player.currentItem?.duration else { return }
             
+            // 暂停播放和进度更新
+            player.pause()
+            
             let time = CMTime(seconds: duration.seconds * progress, preferredTimescale: duration.timescale)
             
-            // 使用精确跳转，并在完成后更新进度
+            // 使用精确跳转
             player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                 guard let self = self else { return }
                 if finished {
                     // 更新进度状态
                     self.progress = progress
                     
-                    // 如果之前是播放状态，则恢复播放
+                    // 恢复播放
                     if self.isPlaying {
                         player.play()
+                    }
+                    
+                    // 延迟重置拖拽状态，确保进度更新已完成
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        self.isScrubbing = false
                     }
                 }
             }
@@ -572,7 +585,7 @@ struct ContentView: View {
                             }
                         }
                         
-                        // 添加空视图作为详情视图，防止分栏显示
+                        // 添加空图作为详情视图，防止分栏显示
                         EmptyView()
                     }
                     .navigationViewStyle(StackNavigationViewStyle()) // 强制使用堆栈样式
@@ -687,18 +700,17 @@ struct ContentView: View {
                     
                     // 进度条
                     Slider(value: $videoProgress, in: 0...1, onEditingChanged: { editing in
-                        guard let player = videoCoordinator?.player,
-                              let duration = player.currentItem?.duration else { return }
+                        guard let coordinator = videoCoordinator else { return }
                         
                         if editing {
-                            // 拖动时暂停播放
-                            player.pause()
+                            // 开始拖动时暂停播放和进度更新
+                            coordinator.isScrubbing = true
+                            coordinator.player?.pause()
+                            isPlaying = false
                         } else {
-                            // 拖动结束后直接设置时间
-                            let targetTime = CMTime(seconds: duration.seconds * videoProgress, 
-                                                  preferredTimescale: duration.timescale)
-                            player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
-                            player.play()
+                            // 拖动结束后跳转到新位置
+                            coordinator.seek(to: videoProgress)
+                            // 注意：不在这里设置 isScrubbing = false，而是在 seek 完成后设置
                         }
                     })
                     .accentColor(.white)
@@ -838,7 +850,7 @@ struct ImagePicker: UIViewControllerRepresentable {
                         try FileManager.default.copyItem(at: url, to: localURL)
                         
                         DispatchQueue.main.async {
-                            // 如果之前在播放视频，先清理音频��话
+                            // 如果之前在播放视频，先清理音频会话
                             if self.parent.videoURL != nil {
                                 PanoramaVideoView.deactivateAudioSession()
                             }
