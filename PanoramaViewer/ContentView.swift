@@ -769,15 +769,8 @@ struct ContentView: View {
                         } else {
                             // 拖动结束后跳转到新位置，并保持原来的播放状态
                             coordinator.seek(to: videoProgress)
-                            // 不改变 isPlaying 状态，让 seek 完成后自动恢复播放
                         }
                     })
-                    .onChange(of: videoProgress) { newValue in
-                        if let coordinator = PanoramaVideoView.activeCoordinator,
-                           !coordinator.isScrubbing && !coordinator.isSeekInProgress {
-                            coordinator.seek(to: newValue)
-                        }
-                    }
                     .accentColor(.white)
                     
                     // 静音按钮
