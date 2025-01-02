@@ -35,7 +35,26 @@ struct PanoramaView: UIViewRepresentable {
         
         // 创建并配置材质
         let material = SCNMaterial()
-        material.diffuse.contents = image
+        
+        // 处理图片尺寸，确保不超过Metal纹理限制
+        let maxTextureSize: CGFloat = 16384
+        let processedImage: UIImage
+        
+        if image.size.width > maxTextureSize || image.size.height > maxTextureSize {
+            let scale = min(maxTextureSize / image.size.width, maxTextureSize / image.size.height)
+            let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            
+            UIGraphicsBeginImageContextWithOptions(newSize, false, 1.0)
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+            processedImage = UIGraphicsGetImageFromCurrentImageContext() ?? image
+            UIGraphicsEndImageContext()
+            
+            print("⚠️ Image resized from \(image.size) to \(processedImage.size) due to Metal texture size limit")
+        } else {
+            processedImage = image
+        }
+        
+        material.diffuse.contents = processedImage
         material.diffuse.contentsTransform = SCNMatrix4MakeScale(-1, 1, 1)  // 水平翻转纹理
         material.diffuse.wrapS = .repeat  // 水平重复
         material.diffuse.wrapT = .clamp   // 垂直不重复
