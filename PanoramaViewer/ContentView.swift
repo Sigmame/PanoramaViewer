@@ -25,7 +25,9 @@ struct PanoramaView: UIViewRepresentable {
         
         // 创建相机节点
         let cameraNode = SCNNode()
-        cameraNode.camera = SCNCamera()
+        let camera = SCNCamera()
+        camera.fieldOfView = 80  // 设置初始FOV为80度
+        cameraNode.camera = camera
         cameraNode.position = SCNVector3(x: 0, y: 0, z: 0)
         scene.rootNode.addChildNode(cameraNode)
         
@@ -85,7 +87,11 @@ struct PanoramaView: UIViewRepresentable {
         let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
         sceneView.addGestureRecognizer(panGesture)
         
-        // 保存初始相机方向
+        // 添加捏合手势
+        let pinchGesture = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
+        sceneView.addGestureRecognizer(pinchGesture)
+        
+        // 保存初始相机方向和引用
         context.coordinator.initialCameraOrientation = cameraNode.orientation
         context.coordinator.cameraNode = cameraNode
         
@@ -110,6 +116,11 @@ struct PanoramaView: UIViewRepresentable {
         // 角度限制
         private let maxVerticalAngle: Float = .pi / 2  // 90度
         private let minVerticalAngle: Float = -.pi / 2 // -90度
+        
+        // 添加缩放相关属性
+        private var initialFOV: CGFloat = 80
+        private let minFOV: CGFloat = 30
+        private let maxFOV: CGFloat = 120
         
         @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
             guard let cameraNode = cameraNode else { return }
@@ -149,6 +160,30 @@ struct PanoramaView: UIViewRepresentable {
             case .ended:
                 // 保存最终角度
                 break
+            default:
+                break
+            }
+        }
+        
+        @objc func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+            guard let camera = cameraNode?.camera else { return }
+            
+            switch gesture.state {
+            case .began:
+                initialFOV = camera.fieldOfView
+            case .changed:
+                // 计算新的FOV，缩放比例与FOV成反比
+                var newFOV = initialFOV / gesture.scale
+                
+                // 限制FOV范围
+                newFOV = min(max(newFOV, minFOV), maxFOV)
+                
+                // 应用新的FOV
+                camera.fieldOfView = newFOV
+                
+            case .ended, .cancelled:
+                // 保存最终的FOV作为下次缩放的初始值
+                initialFOV = camera.fieldOfView
             default:
                 break
             }
@@ -222,7 +257,9 @@ struct PanoramaVideoView: UIViewRepresentable {
         
         // 创建相机节点
         let cameraNode = SCNNode()
-        cameraNode.camera = SCNCamera()
+        let camera = SCNCamera()
+        camera.fieldOfView = 80  // 设置初始FOV为80度
+        cameraNode.camera = camera
         cameraNode.position = SCNVector3(x: 0, y: 0, z: 0)
         scene.rootNode.addChildNode(cameraNode)
         
@@ -314,6 +351,10 @@ struct PanoramaVideoView: UIViewRepresentable {
         let panGesture = UIPanGestureRecognizer(target: newCoordinator, action: #selector(Coordinator.handlePan(_:)))
         sceneView.addGestureRecognizer(panGesture)
         
+        // 添加捏合手势
+        let pinchGesture = UIPinchGestureRecognizer(target: newCoordinator, action: #selector(Coordinator.handlePinch(_:)))
+        sceneView.addGestureRecognizer(pinchGesture)
+        
         // 保存相机节点引用和视频层
         newCoordinator.cameraNode = cameraNode
         newCoordinator.videoLayer = videoLayer
@@ -374,6 +415,11 @@ struct PanoramaVideoView: UIViewRepresentable {
         
         private let maxVerticalAngle: Float = .pi / 2
         private let minVerticalAngle: Float = -.pi / 2
+        
+        // 添加缩放相关属性
+        private var initialFOV: CGFloat = 80
+        private let minFOV: CGFloat = 30
+        private let maxFOV: CGFloat = 120
         
         init(isPlaying: Binding<Bool>, isMuted: Binding<Bool>, progress: Binding<Double>) {
             _isPlaying = isPlaying
@@ -477,6 +523,30 @@ struct PanoramaVideoView: UIViewRepresentable {
                 previousY = currentY
             case .ended:
                 break
+            default:
+                break
+            }
+        }
+        
+        @objc func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+            guard let camera = cameraNode?.camera else { return }
+            
+            switch gesture.state {
+            case .began:
+                initialFOV = camera.fieldOfView
+            case .changed:
+                // 计算新的FOV，缩放比例与FOV成反比
+                var newFOV = initialFOV / gesture.scale
+                
+                // 限制FOV范围
+                newFOV = min(max(newFOV, minFOV), maxFOV)
+                
+                // 应用新的FOV
+                camera.fieldOfView = newFOV
+                
+            case .ended, .cancelled:
+                // 保存最终的FOV作为下次缩放的初始值
+                initialFOV = camera.fieldOfView
             default:
                 break
             }
