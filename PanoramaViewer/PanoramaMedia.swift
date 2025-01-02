@@ -117,21 +117,36 @@ class PanoramaMediaManager: NSObject, ObservableObject {
     
     private func loadThumbnail(for asset: PHAsset, completion: @escaping (UIImage?) -> Void) {
         let options = PHImageRequestOptions()
-        options.deliveryMode = .fastFormat
+        options.deliveryMode = .opportunistic
         options.isNetworkAccessAllowed = true
         options.resizeMode = .fast
         options.isSynchronous = false
         options.version = .current
         
-        let targetSize = CGSize(width: 320, height: 160)
+        // 计算合适的目标尺寸，确保不超过 Metal 的纹理限制
+        let maxTextureSize: CGFloat = 16384
+        let aspectRatio = CGFloat(asset.pixelWidth) / CGFloat(asset.pixelHeight)
+        let targetSize: CGSize
         
-        // 对图片和视频统一使用 requestImage，这样可以利用系统缓存
+        if CGFloat(asset.pixelWidth) > maxTextureSize {
+            let width = min(320, maxTextureSize)
+            let height = width / aspectRatio
+            targetSize = CGSize(width: width, height: height)
+            print("🔍 Scaling down thumbnail to: \(targetSize)")
+        } else {
+            targetSize = CGSize(width: min(320, CGFloat(asset.pixelWidth)), 
+                              height: min(160, CGFloat(asset.pixelHeight)))
+        }
+        
         imageManager.requestImage(
             for: asset,
             targetSize: targetSize,
             contentMode: .aspectFill,
             options: options
-        ) { image, _ in
+        ) { image, info in
+            if let error = info?[PHImageErrorKey] as? Error {
+                print("❌ Error loading thumbnail: \(error)")
+            }
             DispatchQueue.main.async {
                 completion(image)
             }
@@ -143,13 +158,41 @@ class PanoramaMediaManager: NSObject, ObservableObject {
         options.deliveryMode = .highQualityFormat
         options.isNetworkAccessAllowed = true
         options.isSynchronous = false
+        options.version = .current
+        
+        // 计算合适的目标尺寸，确保不超过 Metal 的纹理限制
+        let maxTextureSize: CGFloat = 16384
+        let aspectRatio = CGFloat(asset.pixelWidth) / CGFloat(asset.pixelHeight)
+        let targetSize: CGSize
+        
+        if CGFloat(asset.pixelWidth) > maxTextureSize || CGFloat(asset.pixelHeight) > maxTextureSize {
+            // 如果任一维度超过限制，按比例缩放
+            if aspectRatio > 1 {
+                let width = min(CGFloat(asset.pixelWidth), maxTextureSize)
+                let height = width / aspectRatio
+                targetSize = CGSize(width: width, height: height)
+            } else {
+                let height = min(CGFloat(asset.pixelHeight), maxTextureSize)
+                let width = height * aspectRatio
+                targetSize = CGSize(width: width, height: height)
+            }
+            print("⚠️ Image exceeds Metal texture size limit, scaling down to: \(targetSize)")
+        } else {
+            targetSize = CGSize(width: CGFloat(asset.pixelWidth), height: CGFloat(asset.pixelHeight))
+            print("📐 Loading image with original size: \(targetSize)")
+        }
         
         imageManager.requestImage(
             for: asset,
-            targetSize: PHImageManagerMaximumSize,
+            targetSize: targetSize,
             contentMode: .aspectFit,
             options: options
-        ) { image, _ in
+        ) { image, info in
+            if let error = info?[PHImageErrorKey] as? Error {
+                print("❌ Error loading image: \(error)")
+            } else if let degraded = info?[PHImageResultIsDegradedKey] as? Bool, degraded {
+                print("⚠️ Received degraded image")
+            }
             completion(image)
         }
     }
