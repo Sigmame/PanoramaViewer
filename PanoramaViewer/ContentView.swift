@@ -14,6 +14,7 @@ import UniformTypeIdentifiers
 import SpriteKit
 import Metal
 import QuartzCore
+import Photos
 
 // MARK: - PanoramaView
 struct PanoramaView: UIViewRepresentable {
@@ -806,8 +807,8 @@ struct ContentView: View {
     
     private var mediaControls: some View {
         VStack {
-            // 顶部返回按钮
             HStack {
+                // 返回按钮
                 Button(action: {
                     // 如果当前是视频，先清理音频会话和播放器
                     if mediaType == .video {
@@ -832,10 +833,69 @@ struct ContentView: View {
                         .background(Color.black.opacity(0.5))
                         .clipShape(Circle())
                 }
+                
                 Spacer()
+                
+                // 分享按钮 - 修改分享逻辑
+                Button(action: {
+                    if mediaType == .image {
+                        // 找到当前正在查看的资源
+                        if let currentMedia = mediaManager.panoramaMedia.first(where: { $0.type == .image }) {
+                            mediaManager.prepareForSharing(asset: currentMedia.asset) { items, error in
+                                if let error = error {
+                                    print("Error preparing for sharing: \(error)")
+                                    return
+                                }
+                                
+                                DispatchQueue.main.async {
+                                    let activityVC = UIActivityViewController(
+                                        activityItems: items,
+                                        applicationActivities: nil
+                                    )
+                                    
+                                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                                       let window = windowScene.windows.first,
+                                       let rootVC = window.rootViewController {
+                                        if let popover = activityVC.popoverPresentationController {
+                                            popover.sourceView = rootVC.view
+                                            popover.sourceRect = CGRect(x: UIScreen.main.bounds.width - 64, y: 64, width: 0, height: 0)
+                                            popover.permittedArrowDirections = [.up, .down]
+                                        }
+                                        rootVC.present(activityVC, animated: true)
+                                    }
+                                }
+                            }
+                        }
+                    } else if mediaType == .video, let videoURL = selectedVideoURL {
+                        let activityVC = UIActivityViewController(
+                            activityItems: [videoURL],
+                            applicationActivities: nil
+                        )
+                        
+                        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                           let window = windowScene.windows.first,
+                           let rootVC = window.rootViewController {
+                            if let popover = activityVC.popoverPresentationController {
+                                popover.sourceView = rootVC.view
+                                popover.sourceRect = CGRect(x: UIScreen.main.bounds.width - 64, y: 64, width: 0, height: 0)
+                                popover.permittedArrowDirections = [.up, .down]
+                            }
+                            rootVC.present(activityVC, animated: true)
+                        }
+                    }
+                }) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                        .padding()
+                        .background(Color.black.opacity(0.5))
+                        .clipShape(Circle())
+                }
+                .padding(.trailing)
             }
-            .padding()
-            
+            .padding(.horizontal)
+            .padding(.top, UIApplication.shared.windows.first?.safeAreaInsets.top ?? 0)
+
             Spacer()
             
             // 底部控制栏
@@ -901,41 +961,80 @@ struct ContentView: View {
     }
 }
 
+// 在 MediaThumbnailView 之前添加 ActivityViewController 的定义
+struct ActivityViewController: UIViewControllerRepresentable {
+    let activityItems: [Any]
+    
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(
+            activityItems: activityItems,
+            applicationActivities: nil
+        )
+        return controller
+    }
+    
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
 struct MediaThumbnailView: View {
     let media: PanoramaMedia
     let onTap: (PanoramaMedia) -> Void
     @Environment(\.verticalSizeClass) var verticalSizeClass
+    @State private var isShowingShareSheet = false
+    @State private var shareItems: [Any] = []
+    @EnvironmentObject var mediaManager: PanoramaMediaManager
     
     var body: some View {
         GeometryReader { geometry in
-            Button(action: {
-                onTap(media)
-            }) {
-                ZStack {
-                    if let thumbnail = media.thumbnail {
-                        Image(uiImage: thumbnail)
-                            .resizable()
-                            .aspectRatio(2/1, contentMode: .fill)
-                            .frame(height: verticalSizeClass == .regular ? 100 : 80)
-                            .clipped()
-                            .cornerRadius(8)
-                    } else {
-                        Rectangle()
-                            .fill(Color.gray.opacity(0.3))
-                            .aspectRatio(2/1, contentMode: .fill)
-                            .frame(height: verticalSizeClass == .regular ? 100 : 80)
-                            .cornerRadius(8)
+            ZStack {
+                Button(action: {
+                    onTap(media)
+                }) {
+                    ZStack {
+                        if let thumbnail = media.thumbnail {
+                            Image(uiImage: thumbnail)
+                                .resizable()
+                                .aspectRatio(2/1, contentMode: .fill)
+                                .frame(height: verticalSizeClass == .regular ? 100 : 80)
+                                .clipped()
+                                .cornerRadius(8)
+                        } else {
+                            Rectangle()
+                                .fill(Color.gray.opacity(0.3))
+                                .aspectRatio(2/1, contentMode: .fill)
+                                .frame(height: verticalSizeClass == .regular ? 100 : 80)
+                                .cornerRadius(8)
+                        }
+                        
+                        if media.type == .video {
+                            Image(systemName: "play.circle.fill")
+                                .font(.title)
+                                .foregroundColor(.white)
+                                .shadow(radius: 2)
+                        }
                     }
-                    
-                    if media.type == .video {
-                        Image(systemName: "play.circle.fill")
-                            .font(.title)
-                            .foregroundColor(.white)
-                            .shadow(radius: 2)
-                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: verticalSizeClass == .regular ? 100 : 80)
                 }
-                .frame(maxWidth: .infinity)
-                .frame(height: verticalSizeClass == .regular ? 100 : 80)
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.5)
+                        .onEnded { _ in
+                            mediaManager.prepareForSharing(asset: media.asset) { items, error in
+                                if let error = error {
+                                    print("Error preparing for sharing: \(error)")
+                                    return
+                                }
+                                shareItems = items
+                                isShowingShareSheet = true
+                            }
+                        }
+                )
+            }
+            .sheet(isPresented: $isShowingShareSheet) {
+                if !shareItems.isEmpty {
+                    ActivityViewController(activityItems: shareItems)
+                        .ignoresSafeArea()
+                }
             }
         }
         .frame(height: verticalSizeClass == .regular ? 100 : 80)

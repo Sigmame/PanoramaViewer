@@ -213,6 +213,70 @@ class PanoramaMediaManager: NSObject, ObservableObject {
             }
         }
     }
+    
+    func prepareForSharing(asset: PHAsset, completion: @escaping ([Any], Error?) -> Void) {
+        switch asset.mediaType {
+        case .image:
+            let options = PHImageRequestOptions()
+            options.deliveryMode = .highQualityFormat
+            options.isNetworkAccessAllowed = true
+            options.isSynchronous = false
+            options.version = .current
+            
+            // 使用 requestImage 而不是 requestImageDataAndOrientation
+            imageManager.requestImage(
+                for: asset,
+                targetSize: PHImageManagerMaximumSize,
+                contentMode: .aspectFit,
+                options: options
+            ) { image, info in
+                if let error = info?[PHImageErrorKey] as? Error {
+                    completion([], error)
+                    return
+                }
+                
+                if let image = image {
+                    // 将图片保存到临时文件
+                    if let data = image.jpegData(compressionQuality: 1.0) {
+                        let tempDir = FileManager.default.temporaryDirectory
+                        let fileName = "\(UUID().uuidString).jpg"
+                        let fileURL = tempDir.appendingPathComponent(fileName)
+                        
+                        do {
+                            try data.write(to: fileURL)
+                            completion([fileURL], nil)
+                        } catch {
+                            completion([image], nil) // 如果写入失败，回退到使用 UIImage
+                        }
+                    } else {
+                        completion([image], nil)
+                    }
+                } else {
+                    completion([], NSError(domain: "PanoramaViewer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to prepare image for sharing"]))
+                }
+            }
+            
+        case .video:
+            let options = PHVideoRequestOptions()
+            options.deliveryMode = .highQualityFormat
+            options.isNetworkAccessAllowed = true
+            options.version = .current
+            
+            imageManager.requestAVAsset(
+                forVideo: asset,
+                options: options
+            ) { avAsset, _, _ in
+                if let urlAsset = avAsset as? AVURLAsset {
+                    completion([urlAsset.url], nil)
+                } else {
+                    completion([], NSError(domain: "PanoramaViewer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to prepare video for sharing"]))
+                }
+            }
+            
+        default:
+            completion([], NSError(domain: "PanoramaViewer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unsupported media type"]))
+        }
+    }
 }
 
 extension PanoramaMediaManager: PHPhotoLibraryChangeObserver {
