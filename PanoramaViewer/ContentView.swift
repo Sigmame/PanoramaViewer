@@ -1477,7 +1477,7 @@ struct ShareViewController: UIViewControllerRepresentable {
         let activityItems = items.map { item -> Any in
             if let url = item as? URL, url.isFileURL {
                 print("📤 Processing file URL for sharing: \(url.lastPathComponent)")
-                return FileActivityItemSource(url: url, coordinatorQueue: context.coordinator.trackingURLs)
+                return FileActivityItemSource(url: url, coordinatorQueue: &context.coordinator.trackingURLs)
             } else if let image = item as? UIImage {
                 print("📤 Processing image for sharing")
                 return image
@@ -1573,7 +1573,7 @@ class FileActivityItemSource: NSObject, UIActivityItemSource {
     private let url: URL
     private let urlAccess: URLAccess
     
-    init(url: URL, coordinatorQueue: [URLAccess]) {
+    init(url: URL, coordinatorQueue: inout [URLAccess]) {
         self.url = url
         self.urlAccess = URLAccess(url: url)
         super.init()
