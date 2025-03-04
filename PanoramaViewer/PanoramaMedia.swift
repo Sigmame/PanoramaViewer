@@ -210,7 +210,7 @@ class PanoramaMediaManager: NSObject, ObservableObject {
                 // 创建本地临时文件，确保具有完整权限
                 let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 let uniqueFileName = UUID().uuidString + ".mov"
-                let localURL = documentsDirectory.appendingPathComponent(uniqueFileName)
+                var localURL = documentsDirectory.appendingPathComponent(uniqueFileName)
                 
                 do {
                     // 如果已存在同名文件，先删除
