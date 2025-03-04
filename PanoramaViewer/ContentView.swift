@@ -1471,55 +1471,41 @@ struct ShareViewController: UIViewControllerRepresentable {
     @Environment(\.presentationMode) var presentationMode
     
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        // 创建协调器
-        let coordinator = context.coordinator
+        print("📤 Starting share process with \(items.count) items")
         
-        // 转换共享项，确保视频URL具有适当权限
-        let processedItems = items.map { item -> Any in
+        // 转换共享项目
+        let activityItems = items.map { item -> Any in
             if let url = item as? URL, url.isFileURL {
-                // 对于文件URL，确保它可以被外部应用访问
-                let success = url.startAccessingSecurityScopedResource()
-                if success {
-                    print("🔐 Successfully started accessing security-scoped resource: \(url.lastPathComponent)")
-                } else {
-                    print("⚠️ Failed to access security-scoped resource: \(url.lastPathComponent)")
-                }
-                
-                // 确保文件存在且可读
-                if FileManager.default.isReadableFile(atPath: url.path) {
-                    print("📄 File is readable: \(url.lastPathComponent)")
-                } else {
-                    print("❌ File is NOT readable: \(url.lastPathComponent)")
-                }
-                
-                // 创建UIActivityItemProvider以确保共享时保持文件访问权限
-                let provider = ShareFileProvider(url: url)
-                coordinator.providers.append(provider)
-                
-                return provider
+                print("📤 Processing file URL for sharing: \(url.lastPathComponent)")
+                return FileActivityItemSource(url: url, coordinatorQueue: context.coordinator.trackingURLs)
             } else if let image = item as? UIImage {
-                // 对于图片，使用专用的提供器
-                let provider = ShareImageProvider(image: image)
-                coordinator.providers.append(provider)
-                return provider
+                print("📤 Processing image for sharing")
+                return image
+            } else {
+                print("📤 Unknown item type: \(type(of: item))")
+                return item
             }
-            return item
         }
         
+        // 创建分享控制器
         let controller = UIActivityViewController(
-            activityItems: processedItems,
+            activityItems: activityItems,
             applicationActivities: activities
         )
         
-        // 分享完成或取消后关闭分享面板
+        // 监听分享完成事件
         controller.completionWithItemsHandler = { (activityType, completed, returnedItems, error) in
+            print("📤 Share completion handler called")
+            print("  - Activity type: \(String(describing: activityType))")
+            print("  - Completed: \(completed)")
+            
             if let error = error {
-                print("❌ Sharing error: \(error.localizedDescription)")
+                print("❌ Share error: \(error.localizedDescription)")
             }
             
-            // 释放所有安全域URL的访问权限
+            // 使用主线程清理并关闭
             DispatchQueue.main.async {
-                coordinator.releaseResources()
+                context.coordinator.cleanupAll()
                 self.presentationMode.wrappedValue.dismiss()
             }
         }
@@ -1530,74 +1516,143 @@ struct ShareViewController: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
     
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        return Coordinator()
     }
     
     class Coordinator: NSObject {
-        var securityScopedURLs: [URL] = []
-        var providers: [NSObject] = []
+        var trackingURLs: [URLAccess] = []
         
-        func releaseResources() {
-            print("🔓 Releasing \(securityScopedURLs.count) security-scoped URLs")
-            for url in securityScopedURLs {
-                url.stopAccessingSecurityScopedResource()
-                print("🔓 Released: \(url.lastPathComponent)")
+        func cleanupAll() {
+            print("🧹 Cleaning up \(trackingURLs.count) tracked URLs")
+            for access in trackingURLs {
+                access.stopAccess()
             }
-            securityScopedURLs.removeAll()
-            providers.removeAll()
+            trackingURLs.removeAll()
         }
         
         deinit {
-            // 安全起见，确保所有URL的访问权限都被释放
-            releaseResources()
+            print("🧹 Coordinator deinit")
+            cleanupAll()
         }
     }
+}
+
+// 用于追踪URL访问权限的辅助类
+class URLAccess {
+    let url: URL
+    private(set) var isAccessing: Bool = false
     
-    // 用于文件分享的自定义提供器
-    class ShareFileProvider: UIActivityItemProvider {
-        private let url: URL
-        private var hasStartedAccess = false
+    init(url: URL) {
+        self.url = url
+        print("🔒 Created URLAccess for: \(url.lastPathComponent)")
+    }
+    
+    func startAccess() -> Bool {
+        guard !isAccessing else { return true }
+        isAccessing = url.startAccessingSecurityScopedResource()
+        print("🔐 Started accessing: \(url.lastPathComponent), success: \(isAccessing)")
+        return isAccessing
+    }
+    
+    func stopAccess() {
+        guard isAccessing else { return }
+        url.stopAccessingSecurityScopedResource()
+        isAccessing = false
+        print("🔓 Stopped accessing: \(url.lastPathComponent)")
+    }
+    
+    deinit {
+        if isAccessing {
+            stopAccess()
+        }
+    }
+}
+
+// 使用NSObject而不是UIActivityItemProvider，以更好地控制文件访问
+class FileActivityItemSource: NSObject, UIActivityItemSource {
+    private let url: URL
+    private let urlAccess: URLAccess
+    
+    init(url: URL, coordinatorQueue: [URLAccess]) {
+        self.url = url
+        self.urlAccess = URLAccess(url: url)
+        super.init()
         
-        init(url: URL) {
-            self.url = url
-            super.init(placeholderItem: url)
+        // 立即开始访问并添加到跟踪队列
+        let success = urlAccess.startAccess()
+        if success {
+            coordinatorQueue.append(urlAccess)
         }
         
-        override var item: Any {
-            // 确保在分享过程中维持对文件的访问
-            if FileManager.default.fileExists(atPath: url.path) {
-                // 保持对文件的访问权限直到分享完成
-                if !hasStartedAccess {
-                    hasStartedAccess = url.startAccessingSecurityScopedResource()
-                    print("🔐 Provider: Started accessing \(url.lastPathComponent), success: \(hasStartedAccess)")
+        // 验证文件
+        if FileManager.default.isReadableFile(atPath: url.path) {
+            // 尝试获取文件属性
+            do {
+                let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+                if let fileSize = attributes[.size] as? UInt64 {
+                    print("📊 File size: \(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))")
                 }
-                return url
-            } else {
-                print("❌ Provider: File does not exist at path: \(url.path)")
-                return url
+                if let permissions = attributes[.posixPermissions] as? NSNumber {
+                    print("🔑 File permissions: \(String(format: "%o", permissions.intValue))")
+                }
+            } catch {
+                print("⚠️ Failed to get file attributes: \(error)")
             }
-        }
-        
-        deinit {
-            if hasStartedAccess {
-                url.stopAccessingSecurityScopedResource()
-                print("🔓 Provider deinit: Released \(url.lastPathComponent)")
-            }
+        } else {
+            print("❌ File is NOT readable: \(url.path)")
         }
     }
     
-    // 用于图片分享的自定义提供器
-    class ShareImageProvider: UIActivityItemProvider {
-        private let image: UIImage
+    // 提供占位项
+    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
+        return url.lastPathComponent
+    }
+    
+    // 提供实际项目
+    func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
+        print("📤 Providing URL for activity type: \(String(describing: activityType?.rawValue))")
         
-        init(image: UIImage) {
-            self.image = image
-            super.init(placeholderItem: image)
+        // 检查文件是否存在
+        let fileExists = FileManager.default.fileExists(atPath: url.path)
+        print("  - File exists: \(fileExists)")
+        
+        // 验证文件是否可读
+        let isReadable = FileManager.default.isReadableFile(atPath: url.path)
+        print("  - File is readable: \(isReadable)")
+        
+        // 确保安全域访问已开始
+        if !urlAccess.isAccessing {
+            let success = urlAccess.startAccess()
+            print("  - Started access again: \(success)")
+        } else {
+            print("  - Already accessing security-scoped resource")
         }
         
-        override var item: Any {
-            return image
+        return url
+    }
+    
+    // 提供缩略图
+    func activityViewController(_ activityViewController: UIActivityViewController, thumbnailImageForActivityType activityType: UIActivity.ActivityType?, suggestedSize size: CGSize) -> UIImage? {
+        // 为视频生成缩略图
+        if url.pathExtension.lowercased() == "mov" || url.pathExtension.lowercased() == "mp4" {
+            let asset = AVAsset(url: url)
+            let imageGenerator = AVAssetImageGenerator(asset: asset)
+            imageGenerator.appliesPreferredTrackTransform = true
+            
+            do {
+                let cgImage = try imageGenerator.copyCGImage(at: CMTime(seconds: 0, preferredTimescale: 1), actualTime: nil)
+                return UIImage(cgImage: cgImage)
+            } catch {
+                print("⚠️ Failed to generate video thumbnail: \(error)")
+                return nil
+            }
         }
+        return nil
+    }
+    
+    // 提供标题
+    func activityViewController(_ activityViewController: UIActivityViewController, subjectForActivityType activityType: UIActivity.ActivityType?) -> String {
+        return url.deletingPathExtension().lastPathComponent
     }
 }
 

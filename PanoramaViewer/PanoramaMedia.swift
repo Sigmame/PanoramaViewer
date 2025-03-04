@@ -205,12 +205,16 @@ class PanoramaMediaManager: NSObject, ObservableObject {
         imageManager.requestAVAsset(
             forVideo: asset,
             options: options
-        ) { avAsset, _, _ in
+        ) { avAsset, audioMix, info in
             if let urlAsset = avAsset as? AVURLAsset {
+                // 检查原始视频的文件扩展名，确保使用正确的扩展名
+                let originalExtension = urlAsset.url.pathExtension.lowercased()
+                let fileExtension = originalExtension.isEmpty ? "mp4" : originalExtension
+                
                 // 创建本地临时文件，确保具有完整权限
-                let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                let uniqueFileName = UUID().uuidString + ".mov"
-                var localURL = documentsDirectory.appendingPathComponent(uniqueFileName)
+                let tempDirectory = FileManager.default.temporaryDirectory
+                let uniqueFileName = UUID().uuidString + "." + fileExtension
+                var localURL = tempDirectory.appendingPathComponent(uniqueFileName)
                 
                 do {
                     // 如果已存在同名文件，先删除
@@ -220,24 +224,26 @@ class PanoramaMediaManager: NSObject, ObservableObject {
                     
                     print("🎥 准备复制视频文件: \(urlAsset.url.lastPathComponent) -> \(localURL.lastPathComponent)")
                     
-                    // 复制视频文件到本地
+                    // 复制视频文件到本地临时目录
                     try FileManager.default.copyItem(at: urlAsset.url, to: localURL)
                     
-                    // 确保文件有正确的权限
+                    // 设置文件权限为所有用户可读写
                     try FileManager.default.setAttributes([
-                        .posixPermissions: 0o644 // 设置读写权限
+                        .posixPermissions: 0o644
                     ], ofItemAtPath: localURL.path)
                     
-                    // 设置文件属性，确保文件可被分享
+                    // 设置文件属性
                     var resourceValues = URLResourceValues()
                     resourceValues.isExcludedFromBackup = true
                     try localURL.setResourceValues(resourceValues)
                     
-                    // 验证文件是否可访问
+                    // 输出详细日志
+                    print("✅ 视频文件准备完成: \(localURL.lastPathComponent)")
+                    
                     if FileManager.default.isReadableFile(atPath: localURL.path) {
-                        print("✅ 视频文件可读: \(localURL.lastPathComponent)")
+                        print("📄 文件可读: \(localURL.path)")
                     } else {
-                        print("⚠️ 视频文件不可读: \(localURL.lastPathComponent)")
+                        print("⚠️ 文件不可读: \(localURL.path)")
                     }
                     
                     // 检查文件大小
@@ -246,14 +252,18 @@ class PanoramaMediaManager: NSObject, ObservableObject {
                         print("📊 视频文件大小: \(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))")
                     }
                     
+                    if let posixPermissions = attributes[.posixPermissions] as? NSNumber {
+                        print("🔑 文件权限: \(String(format: "%o", posixPermissions.intValue))")
+                    }
+                    
                     // 返回本地URL
                     completion(localURL)
                 } catch {
-                    print("❌ Error creating local video copy: \(error)")
+                    print("❌ 创建本地视频副本失败: \(error.localizedDescription)")
                     completion(nil)
                 }
             } else {
-                print("❌ Failed to get AVURLAsset for video")
+                print("❌ 无法获取视频资源")
                 completion(nil)
             }
         }
