@@ -1,6 +1,7 @@
 import Foundation
 import Photos
 import UIKit
+import UniformTypeIdentifiers
 
 enum MediaType {
     case image
@@ -237,14 +238,16 @@ class PanoramaMediaManager: NSObject, ObservableObject {
                     resourceValues.isExcludedFromBackup = true
                     try localURL.setResourceValues(resourceValues)
                     
-                    // 添加额外的UTI类型提示
-                    resourceValues = URLResourceValues()
+                    // 添加额外的UTI类型提示 - 使用contentType而不是typeIdentifier
                     if fileExtension == "mov" {
-                        resourceValues.typeIdentifier = "com.apple.quicktime-movie"
+                        try localURL.setResourceValues(URLResourceValues(dictionary: [
+                            .contentTypeKey: UTType.quickTimeMovie
+                        ]))
                     } else if fileExtension == "mp4" {
-                        resourceValues.typeIdentifier = "public.mpeg-4"
+                        try localURL.setResourceValues(URLResourceValues(dictionary: [
+                            .contentTypeKey: UTType.mpeg4Movie
+                        ]))
                     }
-                    try localURL.setResourceValues(resourceValues)
                     
                     // 验证文件是否可访问
                     let isReadable = FileManager.default.isReadableFile(atPath: localURL.path)
