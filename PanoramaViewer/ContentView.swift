@@ -1471,20 +1471,37 @@ struct ShareViewController: UIViewControllerRepresentable {
     @Environment(\.presentationMode) var presentationMode
     
     func makeUIViewController(context: Context) -> UIActivityViewController {
+        // 创建协调器
+        let coordinator = context.coordinator
+        
         // 转换共享项，确保视频URL具有适当权限
         let processedItems = items.map { item -> Any in
             if let url = item as? URL, url.isFileURL {
                 // 对于文件URL，确保它可以被外部应用访问
-                url.startAccessingSecurityScopedResource()
+                let success = url.startAccessingSecurityScopedResource()
+                if success {
+                    print("🔐 Successfully started accessing security-scoped resource: \(url.lastPathComponent)")
+                } else {
+                    print("⚠️ Failed to access security-scoped resource: \(url.lastPathComponent)")
+                }
                 
-                // 为文件创建一个FileManager共享实例
-                let resourceValues = try? url.resourceValues(forKeys: [.fileSizeKey])
-                let _ = resourceValues?.fileSize  // 触发访问
+                // 确保文件存在且可读
+                if FileManager.default.isReadableFile(atPath: url.path) {
+                    print("📄 File is readable: \(url.lastPathComponent)")
+                } else {
+                    print("❌ File is NOT readable: \(url.lastPathComponent)")
+                }
                 
-                // 确保保持权限直到分享完成
-                context.coordinator.securityScopedURLs.append(url)
+                // 创建UIActivityItemProvider以确保共享时保持文件访问权限
+                let provider = ShareFileProvider(url: url)
+                coordinator.providers.append(provider)
                 
-                return url
+                return provider
+            } else if let image = item as? UIImage {
+                // 对于图片，使用专用的提供器
+                let provider = ShareImageProvider(image: image)
+                coordinator.providers.append(provider)
+                return provider
             }
             return item
         }
@@ -1496,12 +1513,13 @@ struct ShareViewController: UIViewControllerRepresentable {
         
         // 分享完成或取消后关闭分享面板
         controller.completionWithItemsHandler = { (activityType, completed, returnedItems, error) in
-            // 释放所有安全域URL的访问权限
-            for url in context.coordinator.securityScopedURLs {
-                url.stopAccessingSecurityScopedResource()
+            if let error = error {
+                print("❌ Sharing error: \(error.localizedDescription)")
             }
             
+            // 释放所有安全域URL的访问权限
             DispatchQueue.main.async {
+                coordinator.releaseResources()
                 self.presentationMode.wrappedValue.dismiss()
             }
         }
@@ -1517,12 +1535,68 @@ struct ShareViewController: UIViewControllerRepresentable {
     
     class Coordinator: NSObject {
         var securityScopedURLs: [URL] = []
+        var providers: [NSObject] = []
         
-        deinit {
-            // 以防completionHandler未被调用的安全措施
+        func releaseResources() {
+            print("🔓 Releasing \(securityScopedURLs.count) security-scoped URLs")
             for url in securityScopedURLs {
                 url.stopAccessingSecurityScopedResource()
+                print("🔓 Released: \(url.lastPathComponent)")
             }
+            securityScopedURLs.removeAll()
+            providers.removeAll()
+        }
+        
+        deinit {
+            // 安全起见，确保所有URL的访问权限都被释放
+            releaseResources()
+        }
+    }
+    
+    // 用于文件分享的自定义提供器
+    class ShareFileProvider: UIActivityItemProvider {
+        private let url: URL
+        private var hasStartedAccess = false
+        
+        init(url: URL) {
+            self.url = url
+            super.init(placeholderItem: url)
+        }
+        
+        override var item: Any {
+            // 确保在分享过程中维持对文件的访问
+            if FileManager.default.fileExists(atPath: url.path) {
+                // 保持对文件的访问权限直到分享完成
+                if !hasStartedAccess {
+                    hasStartedAccess = url.startAccessingSecurityScopedResource()
+                    print("🔐 Provider: Started accessing \(url.lastPathComponent), success: \(hasStartedAccess)")
+                }
+                return url
+            } else {
+                print("❌ Provider: File does not exist at path: \(url.path)")
+                return url
+            }
+        }
+        
+        deinit {
+            if hasStartedAccess {
+                url.stopAccessingSecurityScopedResource()
+                print("🔓 Provider deinit: Released \(url.lastPathComponent)")
+            }
+        }
+    }
+    
+    // 用于图片分享的自定义提供器
+    class ShareImageProvider: UIActivityItemProvider {
+        private let image: UIImage
+        
+        init(image: UIImage) {
+            self.image = image
+            super.init(placeholderItem: image)
+        }
+        
+        override var item: Any {
+            return image
         }
     }
 }

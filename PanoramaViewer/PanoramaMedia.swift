@@ -218,13 +218,33 @@ class PanoramaMediaManager: NSObject, ObservableObject {
                         try FileManager.default.removeItem(at: localURL)
                     }
                     
+                    print("🎥 准备复制视频文件: \(urlAsset.url.lastPathComponent) -> \(localURL.lastPathComponent)")
+                    
                     // 复制视频文件到本地
                     try FileManager.default.copyItem(at: urlAsset.url, to: localURL)
+                    
+                    // 确保文件有正确的权限
+                    try FileManager.default.setAttributes([
+                        .posixPermissions: 0o644 // 设置读写权限
+                    ], ofItemAtPath: localURL.path)
                     
                     // 设置文件属性，确保文件可被分享
                     var resourceValues = URLResourceValues()
                     resourceValues.isExcludedFromBackup = true
                     try localURL.setResourceValues(resourceValues)
+                    
+                    // 验证文件是否可访问
+                    if FileManager.default.isReadableFile(atPath: localURL.path) {
+                        print("✅ 视频文件可读: \(localURL.lastPathComponent)")
+                    } else {
+                        print("⚠️ 视频文件不可读: \(localURL.lastPathComponent)")
+                    }
+                    
+                    // 检查文件大小
+                    let attributes = try FileManager.default.attributesOfItem(atPath: localURL.path)
+                    if let fileSize = attributes[.size] as? UInt64 {
+                        print("📊 视频文件大小: \(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))")
+                    }
                     
                     // 返回本地URL
                     completion(localURL)
@@ -233,6 +253,7 @@ class PanoramaMediaManager: NSObject, ObservableObject {
                     completion(nil)
                 }
             } else {
+                print("❌ Failed to get AVURLAsset for video")
                 completion(nil)
             }
         }
