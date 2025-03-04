@@ -211,7 +211,7 @@ class PanoramaMediaManager: NSObject, ObservableObject {
                 let originalExtension = urlAsset.url.pathExtension.lowercased()
                 let fileExtension = originalExtension.isEmpty ? "mp4" : originalExtension
                 
-                // 创建本地临时文件，确保具有完整权限
+                // 仅使用临时目录，而不是应用的文档目录
                 let tempDirectory = FileManager.default.temporaryDirectory
                 let uniqueFileName = UUID().uuidString + "." + fileExtension
                 var localURL = tempDirectory.appendingPathComponent(uniqueFileName)
@@ -224,27 +224,31 @@ class PanoramaMediaManager: NSObject, ObservableObject {
                     
                     print("🎥 准备复制视频文件: \(urlAsset.url.lastPathComponent) -> \(localURL.lastPathComponent)")
                     
-                    // 复制视频文件到本地临时目录
+                    // 复制视频文件到临时目录
                     try FileManager.default.copyItem(at: urlAsset.url, to: localURL)
                     
-                    // 设置文件权限为所有用户可读写
+                    // 设置文件权限为所有用户可读写，这对AirDrop非常重要
                     try FileManager.default.setAttributes([
                         .posixPermissions: 0o644
                     ], ofItemAtPath: localURL.path)
                     
-                    // 设置文件属性
+                    // 设置文件属性，确保不会包含在备份中
                     var resourceValues = URLResourceValues()
                     resourceValues.isExcludedFromBackup = true
                     try localURL.setResourceValues(resourceValues)
                     
-                    // 输出详细日志
-                    print("✅ 视频文件准备完成: \(localURL.lastPathComponent)")
-                    
-                    if FileManager.default.isReadableFile(atPath: localURL.path) {
-                        print("📄 文件可读: \(localURL.path)")
-                    } else {
-                        print("⚠️ 文件不可读: \(localURL.path)")
+                    // 添加额外的UTI类型提示
+                    resourceValues = URLResourceValues()
+                    if fileExtension == "mov" {
+                        resourceValues.typeIdentifier = "com.apple.quicktime-movie"
+                    } else if fileExtension == "mp4" {
+                        resourceValues.typeIdentifier = "public.mpeg-4"
                     }
+                    try localURL.setResourceValues(resourceValues)
+                    
+                    // 验证文件是否可访问
+                    let isReadable = FileManager.default.isReadableFile(atPath: localURL.path)
+                    print(isReadable ? "✅ 视频文件可读" : "⚠️ 视频文件不可读")
                     
                     // 检查文件大小
                     let attributes = try FileManager.default.attributesOfItem(atPath: localURL.path)

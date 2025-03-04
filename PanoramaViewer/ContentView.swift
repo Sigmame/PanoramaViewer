@@ -1496,15 +1496,15 @@ struct ShareViewController: UIViewControllerRepresentable {
         // 监听分享完成事件
         controller.completionWithItemsHandler = { (activityType, completed, returnedItems, error) in
             print("📤 Share completion handler called")
-            print("  - Activity type: \(String(describing: activityType))")
+            print("  - Activity type: \(String(describing: activityType?.rawValue))")
             print("  - Completed: \(completed)")
             
             if let error = error {
                 print("❌ Share error: \(error.localizedDescription)")
             }
             
-            // 使用主线程清理并关闭
-            DispatchQueue.main.async {
+            // 延迟释放资源，确保AirDrop完成
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 context.coordinator.cleanupAll()
                 self.presentationMode.wrappedValue.dismiss()
             }
@@ -1527,6 +1527,7 @@ struct ShareViewController: UIViewControllerRepresentable {
             for access in trackingURLs {
                 access.stopAccess()
             }
+            print("🧹 Released \(trackingURLs.count) security-scoped URLs")
             trackingURLs.removeAll()
         }
         
@@ -1572,6 +1573,7 @@ class URLAccess {
 class FileActivityItemSource: NSObject, UIActivityItemSource {
     private let url: URL
     private let urlAccess: URLAccess
+    private var hasStartedSharing: Bool = false
     
     init(url: URL, coordinatorQueue: inout [URLAccess]) {
         self.url = url
@@ -1580,27 +1582,39 @@ class FileActivityItemSource: NSObject, UIActivityItemSource {
         
         // 立即开始访问并添加到跟踪队列
         let success = urlAccess.startAccess()
+        print("🔒 Initializing FileActivityItemSource for: \(url.lastPathComponent), access success: \(success)")
         if success {
             coordinatorQueue.append(urlAccess)
-        }
-        
-        // 验证文件
-        if FileManager.default.isReadableFile(atPath: url.path) {
-            // 尝试获取文件属性
-            do {
-                let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-                if let fileSize = attributes[.size] as? UInt64 {
-                    print("📊 File size: \(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))")
+            
+            // 验证文件
+            if FileManager.default.isReadableFile(atPath: url.path) {
+                // 尝试获取文件属性
+                do {
+                    // 确保文件权限正确
+                    try FileManager.default.setAttributes([
+                        .posixPermissions: 0o644 // 设置为所有用户可读写
+                    ], ofItemAtPath: url.path)
+                    
+                    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+                    if let fileSize = attributes[.size] as? UInt64 {
+                        print("📊 File size: \(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))")
+                    }
+                    if let permissions = attributes[.posixPermissions] as? NSNumber {
+                        print("🔑 File permissions: \(String(format: "%o", permissions.intValue))")
+                    }
+                } catch {
+                    print("⚠️ Failed to get/set file attributes: \(error)")
                 }
-                if let permissions = attributes[.posixPermissions] as? NSNumber {
-                    print("🔑 File permissions: \(String(format: "%o", permissions.intValue))")
-                }
-            } catch {
-                print("⚠️ Failed to get file attributes: \(error)")
+            } else {
+                print("❌ File is NOT readable: \(url.path)")
             }
         } else {
-            print("❌ File is NOT readable: \(url.path)")
+            print("❌ Failed to start accessing security-scoped resource: \(url.lastPathComponent)")
         }
+    }
+    
+    deinit {
+        print("🧹 FileActivityItemSource deinit for: \(url.lastPathComponent)")
     }
     
     // 提供占位项
@@ -1612,27 +1626,69 @@ class FileActivityItemSource: NSObject, UIActivityItemSource {
     func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
         print("📤 Providing URL for activity type: \(String(describing: activityType?.rawValue))")
         
+        // 确保我们仍然有文件访问权限
+        if !urlAccess.isAccessing {
+            let success = urlAccess.startAccess()
+            print("  - Started access again: \(success)")
+            if !success {
+                print("❌ Failed to reacquire security-scoped resource access")
+                return nil
+            }
+        }
+        
         // 检查文件是否存在
         let fileExists = FileManager.default.fileExists(atPath: url.path)
         print("  - File exists: \(fileExists)")
+        if !fileExists {
+            print("❌ File no longer exists at path: \(url.path)")
+            return nil
+        }
         
         // 验证文件是否可读
         let isReadable = FileManager.default.isReadableFile(atPath: url.path)
         print("  - File is readable: \(isReadable)")
-        
-        // 确保安全域访问已开始
-        if !urlAccess.isAccessing {
-            let success = urlAccess.startAccess()
-            print("  - Started access again: \(success)")
-        } else {
-            print("  - Already accessing security-scoped resource")
+        if !isReadable {
+            print("❌ File is not readable: \(url.path)")
+            return nil
         }
         
+        hasStartedSharing = true
         return url
     }
     
+    // 确保在AirDrop过程中保持文件访问权限
+    func activityViewController(_ activityViewController: UIActivityViewController, 
+                               dataTypeIdentifierForActivityType activityType: UIActivity.ActivityType?) -> String {
+        // 如果是AirDrop，确保我们的文件访问权限仍然有效
+        if activityType?.rawValue == "com.apple.UIKit.activity.AirDrop" {
+            print("🔄 AirDrop activity detected, ensuring file access")
+            if !urlAccess.isAccessing {
+                let success = urlAccess.startAccess()
+                print("  - Refreshed access for AirDrop: \(success)")
+            } else {
+                print("  - Access still valid for AirDrop")
+            }
+        }
+        
+        // 确定并返回适当的UTI
+        if url.pathExtension.lowercased() == "mov" {
+            return "com.apple.quicktime-movie"
+        } else if url.pathExtension.lowercased() == "mp4" {
+            return "public.mpeg-4"
+        } else if url.pathExtension.lowercased() == "jpg" || url.pathExtension.lowercased() == "jpeg" {
+            return "public.jpeg"
+        } else if url.pathExtension.lowercased() == "png" {
+            return "public.png"
+        }
+        
+        // 默认为通用数据类型
+        return "public.data"
+    }
+    
     // 提供缩略图
-    func activityViewController(_ activityViewController: UIActivityViewController, thumbnailImageForActivityType activityType: UIActivity.ActivityType?, suggestedSize size: CGSize) -> UIImage? {
+    func activityViewController(_ activityViewController: UIActivityViewController, 
+                               thumbnailImageForActivityType activityType: UIActivity.ActivityType?, 
+                               suggestedSize size: CGSize) -> UIImage? {
         // 为视频生成缩略图
         if url.pathExtension.lowercased() == "mov" || url.pathExtension.lowercased() == "mp4" {
             let asset = AVAsset(url: url)
@@ -1651,7 +1707,8 @@ class FileActivityItemSource: NSObject, UIActivityItemSource {
     }
     
     // 提供标题
-    func activityViewController(_ activityViewController: UIActivityViewController, subjectForActivityType activityType: UIActivity.ActivityType?) -> String {
+    func activityViewController(_ activityViewController: UIActivityViewController, 
+                               subjectForActivityType activityType: UIActivity.ActivityType?) -> String {
         return url.deletingPathExtension().lastPathComponent
     }
 }
