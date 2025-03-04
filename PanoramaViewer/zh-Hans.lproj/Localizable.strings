@@ -8,4 +8,5 @@
 "go_to_settings" = "前往设置";
 "no_content_to_share" = "没有可分享的内容";
 "share" = "分享";
-"select_action" = "选择操作"; 
+"select_action" = "选择操作";
+"select" = "选择"; 

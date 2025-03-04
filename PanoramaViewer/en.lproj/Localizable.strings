@@ -8,4 +8,5 @@
 "go_to_settings" = "Go to Settings";
 "no_content_to_share" = "No content to share";
 "share" = "Share";
-"select_action" = "Select Action"; 
+"select_action" = "Select Action";
+"select" = "Select"; 

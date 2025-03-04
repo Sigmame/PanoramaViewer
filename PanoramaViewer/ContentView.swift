@@ -625,6 +625,12 @@ struct ContentView: View {
     @State private var videoProgress: Double = 0
     @State private var isSharePresented = false // 新增：分享面板状态
     
+    // 多选相关状态
+    @State private var isSelectMode = false
+    @State private var selectedMediaItems: Set<UUID> = []
+    @State private var isMultiSharePresented = false
+    @State private var shareableItems: [Any] = []
+    
     @Environment(\.verticalSizeClass) var verticalSizeClass
     
     private var columns: [GridItem] {
@@ -716,9 +722,17 @@ struct ContentView: View {
                                 ScrollView {
                                     LazyVGrid(columns: columns, spacing: verticalSizeClass == .regular ? 16 : 12) {
                                         ForEach(mediaManager.panoramaMedia) { media in
-                                            MediaThumbnailView(media: media) { media in
-                                                loadAndDisplayMedia(media)
-                                            }
+                                            MediaThumbnailView(
+                                                media: media,
+                                                onTap: { media in
+                                                    loadAndDisplayMedia(media)
+                                                },
+                                                isSelectMode: isSelectMode,
+                                                isSelected: selectedMediaItems.contains(media.id),
+                                                onToggleSelection: { id in
+                                                    toggleSelection(id)
+                                                }
+                                            )
                                         }
                                     }
                                     .padding(verticalSizeClass == .regular ? 16 : 12)
@@ -731,14 +745,63 @@ struct ContentView: View {
                         .navigationBarTitleDisplayMode(verticalSizeClass == .regular ? .large : .inline)
                         .toolbar {
                             ToolbarItem(placement: .navigationBarTrailing) {
-                                Button(action: {
-                                    showingOptions = true
-                                }) {
-                                    Image(systemName: "ellipsis.circle")
-                                        .font(.title2)
+                                if isSelectMode {
+                                    Button(action: {
+                                        isSelectMode = false
+                                        selectedMediaItems.removeAll()
+                                    }) {
+                                        Text("cancel".localized())
+                                    }
+                                } else {
+                                    Button(action: {
+                                        showingOptions = true
+                                    }) {
+                                        Image(systemName: "ellipsis.circle")
+                                            .font(.title2)
+                                    }
+                                }
+                            }
+                            
+                            ToolbarItem(placement: .navigationBarLeading) {
+                                if !isSelectMode && !mediaManager.panoramaMedia.isEmpty {
+                                    Button(action: {
+                                        isSelectMode = true
+                                    }) {
+                                        Text("select".localized())
+                                    }
                                 }
                             }
                         }
+                        
+                        // 添加多选模式下的底部工具栏
+                        .overlay(
+                            Group {
+                                if isSelectMode && !selectedMediaItems.isEmpty {
+                                    VStack {
+                                        Spacer()
+                                        HStack {
+                                            Spacer()
+                                            
+                                            Button(action: {
+                                                prepareSelectedItemsForSharing()
+                                            }) {
+                                                VStack {
+                                                    Image(systemName: "square.and.arrow.up")
+                                                        .font(.title2)
+                                                    Text("share".localized())
+                                                        .font(.caption)
+                                                }
+                                                .foregroundColor(.white)
+                                                .padding()
+                                            }
+                                            
+                                            Spacer()
+                                        }
+                                        .background(Color.black.opacity(0.7))
+                                    }
+                                }
+                            }
+                        )
                         
                         // 添加空图作为详情视图，防止分栏显示
                         EmptyView()
@@ -753,6 +816,17 @@ struct ContentView: View {
         }
         .sheet(isPresented: $isFilePickerPresented) {
             UnifiedFilePicker(image: $selectedImage, videoURL: $selectedVideoURL, mediaType: $mediaType)
+        }
+        .sheet(isPresented: $isMultiSharePresented) {
+            // 批量分享视图
+            ShareViewController(items: shareableItems, activities: nil)
+                .onDisappear {
+                    // 分享完成后退出选择模式
+                    if isSelectMode {
+                        isSelectMode = false
+                        selectedMediaItems.removeAll()
+                    }
+                }
         }
         .actionSheet(isPresented: $showingOptions) {
             ActionSheet(
@@ -925,6 +999,77 @@ struct ContentView: View {
             }
         }
     }
+    
+    private func prepareSelectedItemsForSharing() {
+        guard !selectedMediaItems.isEmpty else { return }
+        
+        // 清空之前的分享项
+        shareableItems.removeAll()
+        
+        // 创建一个计数器来跟踪加载的媒体数量
+        let totalItems = selectedMediaItems.count
+        var loadedItems = 0
+        
+        // 获取选中的媒体项
+        let selectedMedia = mediaManager.panoramaMedia.filter { selectedMediaItems.contains($0.id) }
+        
+        // 为每个选中的媒体项加载完整内容
+        for media in selectedMedia {
+            switch media.type {
+            case .image:
+                mediaManager.loadFullResolutionImage(for: media.asset) { image in
+                    if let image = image {
+                        DispatchQueue.main.async {
+                            self.shareableItems.append(image)
+                            loadedItems += 1
+                            
+                            // 所有项目加载完毕时，显示分享面板
+                            if loadedItems == totalItems {
+                                self.isMultiSharePresented = true
+                            }
+                        }
+                    } else {
+                        // 处理加载失败的情况
+                        loadedItems += 1
+                        if loadedItems == totalItems && !self.shareableItems.isEmpty {
+                            self.isMultiSharePresented = true
+                        }
+                    }
+                }
+                
+            case .video:
+                mediaManager.loadVideo(for: media.asset) { url in
+                    if let url = url {
+                        DispatchQueue.main.async {
+                            self.shareableItems.append(url)
+                            loadedItems += 1
+                            
+                            // 所有项目加载完毕时，显示分享面板
+                            if loadedItems == totalItems {
+                                self.isMultiSharePresented = true
+                            }
+                        }
+                    } else {
+                        // 处理加载失败的情况
+                        loadedItems += 1
+                        if loadedItems == totalItems && !self.shareableItems.isEmpty {
+                            self.isMultiSharePresented = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private func toggleSelection(_ id: UUID) {
+        if isSelectMode {
+            if selectedMediaItems.contains(id) {
+                selectedMediaItems.remove(id)
+            } else {
+                selectedMediaItems.insert(id)
+            }
+        }
+    }
 }
 
 struct MediaThumbnailView: View {
@@ -936,46 +1081,77 @@ struct MediaThumbnailView: View {
     @State private var isSharePresented = false
     @State private var shareableItem: Any? = nil
     
+    // 多选模式相关属性
+    var isSelectMode: Bool = false
+    var isSelected: Bool = false
+    var onToggleSelection: ((UUID) -> Void)? = nil
+    
     var body: some View {
         GeometryReader { geometry in
-            Button(action: {
-                onTap(media)
-            }) {
-                ZStack {
-                    if let thumbnail = media.thumbnail {
-                        Image(uiImage: thumbnail)
-                            .resizable()
-                            .aspectRatio(2/1, contentMode: .fill)
-                            .frame(height: verticalSizeClass == .regular ? 100 : 80)
-                            .clipped()
-                            .cornerRadius(8)
+            ZStack {
+                Button(action: {
+                    if isSelectMode {
+                        onToggleSelection?(media.id)
                     } else {
-                        Rectangle()
-                            .fill(Color.gray.opacity(0.3))
-                            .aspectRatio(2/1, contentMode: .fill)
-                            .frame(height: verticalSizeClass == .regular ? 100 : 80)
-                            .cornerRadius(8)
+                        onTap(media)
                     }
-                    
-                    if media.type == .video {
-                        Image(systemName: "play.circle.fill")
-                            .font(.title)
-                            .foregroundColor(.white)
-                            .shadow(radius: 2)
+                }) {
+                    ZStack {
+                        if let thumbnail = media.thumbnail {
+                            Image(uiImage: thumbnail)
+                                .resizable()
+                                .aspectRatio(2/1, contentMode: .fill)
+                                .frame(height: verticalSizeClass == .regular ? 100 : 80)
+                                .clipped()
+                                .cornerRadius(8)
+                        } else {
+                            Rectangle()
+                                .fill(Color.gray.opacity(0.3))
+                                .aspectRatio(2/1, contentMode: .fill)
+                                .frame(height: verticalSizeClass == .regular ? 100 : 80)
+                                .cornerRadius(8)
+                        }
+                        
+                        if media.type == .video {
+                            Image(systemName: "play.circle.fill")
+                                .font(.title)
+                                .foregroundColor(.white)
+                                .shadow(radius: 2)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: verticalSizeClass == .regular ? 100 : 80)
+                }
+                
+                // 多选指示器
+                if isSelectMode {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                .font(.title2)
+                                .foregroundColor(isSelected ? .blue : .white)
+                                .background(Color.black.opacity(0.3))
+                                .clipShape(Circle())
+                                .padding(6)
+                        }
+                        Spacer()
                     }
                 }
-                .frame(maxWidth: .infinity)
-                .frame(height: verticalSizeClass == .regular ? 100 : 80)
             }
             .contextMenu {
-                Button(action: {
-                    prepareForSharing()
-                }) {
-                    Label("share".localized(), systemImage: "square.and.arrow.up")
+                if !isSelectMode {
+                    Button(action: {
+                        prepareForSharing()
+                    }) {
+                        Label("share".localized(), systemImage: "square.and.arrow.up")
+                    }
                 }
             }
             .onLongPressGesture {
-                showingOptions = true
+                if !isSelectMode {
+                    showingOptions = true
+                }
             }
         }
         .frame(height: verticalSizeClass == .regular ? 100 : 80)
