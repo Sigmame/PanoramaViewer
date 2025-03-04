@@ -238,17 +238,6 @@ class PanoramaMediaManager: NSObject, ObservableObject {
                     resourceValues.isExcludedFromBackup = true
                     try localURL.setResourceValues(resourceValues)
                     
-                    // 添加额外的UTI类型提示 - 使用contentType而不是typeIdentifier
-                    if fileExtension == "mov" {
-                        var resourceValues = URLResourceValues()
-                        resourceValues.contentType = UTType.quickTimeMovie
-                        try localURL.setResourceValues(resourceValues)
-                    } else if fileExtension == "mp4" {
-                        var resourceValues = URLResourceValues()
-                        resourceValues.contentType = UTType.mpeg4Movie
-                        try localURL.setResourceValues(resourceValues)
-                    }
-                    
                     // 验证文件是否可访问
                     let isReadable = FileManager.default.isReadableFile(atPath: localURL.path)
                     print(isReadable ? "✅ 视频文件可读" : "⚠️ 视频文件不可读")
