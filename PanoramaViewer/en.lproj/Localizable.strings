@@ -9,4 +9,6 @@
 "no_content_to_share" = "No content to share";
 "share" = "Share";
 "select_action" = "Select Action";
-"select" = "Select"; 
+"select" = "Select";
+"preparing_media" = "Preparing Media";
+"please_wait" = "Please wait while we prepare your media for sharing..."; 

@@ -9,4 +9,6 @@
 "no_content_to_share" = "没有可分享的内容";
 "share" = "分享";
 "select_action" = "选择操作";
-"select" = "选择"; 
+"select" = "选择";
+"preparing_media" = "准备媒体中";
+"please_wait" = "正在准备分享的媒体文件，请稍候..."; 

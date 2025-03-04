@@ -924,7 +924,22 @@ struct ContentView: View {
                 
                 // 添加分享按钮
                 Button(action: {
-                    isSharePresented = true
+                    // 显示加载指示器
+                    let loadingAlert = UIAlertController(
+                        title: "preparing_media".localized(),
+                        message: "please_wait".localized(),
+                        preferredStyle: .alert
+                    )
+                    
+                    let rootVC = UIApplication.shared.windows.first?.rootViewController
+                    rootVC?.present(loadingAlert, animated: true)
+                    
+                    // 延迟一下再关闭加载指示器，以便文件处理完成
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        loadingAlert.dismiss(animated: true) {
+                            isSharePresented = true
+                        }
+                    }
                 }) {
                     Image(systemName: "square.and.arrow.up")
                         .font(.title2)
@@ -1006,12 +1021,35 @@ struct ContentView: View {
         // 清空之前的分享项
         shareableItems.removeAll()
         
+        // 显示加载指示器
+        let loadingAlert = UIAlertController(
+            title: "preparing_media".localized(),
+            message: "please_wait".localized(),
+            preferredStyle: .alert
+        )
+        
+        let rootVC = UIApplication.shared.windows.first?.rootViewController
+        rootVC?.present(loadingAlert, animated: true)
+        
         // 创建一个计数器来跟踪加载的媒体数量
         let totalItems = selectedMediaItems.count
         var loadedItems = 0
         
         // 获取选中的媒体项
         let selectedMedia = mediaManager.panoramaMedia.filter { selectedMediaItems.contains($0.id) }
+        
+        // 处理分享项目完成后的回调
+        let finishLoading = {
+            // 关闭加载指示器
+            DispatchQueue.main.async {
+                loadingAlert.dismiss(animated: true) {
+                    // 只有在有内容可分享时才显示分享面板
+                    if !self.shareableItems.isEmpty {
+                        self.isMultiSharePresented = true
+                    }
+                }
+            }
+        }
         
         // 为每个选中的媒体项加载完整内容
         for media in selectedMedia {
@@ -1025,14 +1063,14 @@ struct ContentView: View {
                             
                             // 所有项目加载完毕时，显示分享面板
                             if loadedItems == totalItems {
-                                self.isMultiSharePresented = true
+                                finishLoading()
                             }
                         }
                     } else {
                         // 处理加载失败的情况
                         loadedItems += 1
-                        if loadedItems == totalItems && !self.shareableItems.isEmpty {
-                            self.isMultiSharePresented = true
+                        if loadedItems == totalItems {
+                            finishLoading()
                         }
                     }
                 }
@@ -1046,14 +1084,14 @@ struct ContentView: View {
                             
                             // 所有项目加载完毕时，显示分享面板
                             if loadedItems == totalItems {
-                                self.isMultiSharePresented = true
+                                finishLoading()
                             }
                         }
                     } else {
                         // 处理加载失败的情况
                         loadedItems += 1
-                        if loadedItems == totalItems && !self.shareableItems.isEmpty {
-                            self.isMultiSharePresented = true
+                        if loadedItems == totalItems {
+                            finishLoading()
                         }
                     }
                 }
@@ -1174,13 +1212,29 @@ struct MediaThumbnailView: View {
     }
     
     private func prepareForSharing() {
+        // 显示加载指示器
+        let loadingAlert = UIAlertController(
+            title: "preparing_media".localized(),
+            message: "please_wait".localized(),
+            preferredStyle: .alert
+        )
+        
+        let rootVC = UIApplication.shared.windows.first?.rootViewController
+        rootVC?.present(loadingAlert, animated: true)
+        
         switch media.type {
         case .image:
             mediaManager.loadFullResolutionImage(for: media.asset) { image in
                 if let image = image {
                     DispatchQueue.main.async {
-                        self.shareableItem = image
-                        self.isSharePresented = true
+                        loadingAlert.dismiss(animated: true) {
+                            self.shareableItem = image
+                            self.isSharePresented = true
+                        }
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        loadingAlert.dismiss(animated: true)
                     }
                 }
             }
@@ -1188,8 +1242,14 @@ struct MediaThumbnailView: View {
             mediaManager.loadVideo(for: media.asset) { url in
                 if let url = url {
                     DispatchQueue.main.async {
-                        self.shareableItem = url
-                        self.isSharePresented = true
+                        loadingAlert.dismiss(animated: true) {
+                            self.shareableItem = url
+                            self.isSharePresented = true
+                        }
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        loadingAlert.dismiss(animated: true)
                     }
                 }
             }
@@ -1411,13 +1471,36 @@ struct ShareViewController: UIViewControllerRepresentable {
     @Environment(\.presentationMode) var presentationMode
     
     func makeUIViewController(context: Context) -> UIActivityViewController {
+        // 转换共享项，确保视频URL具有适当权限
+        let processedItems = items.map { item -> Any in
+            if let url = item as? URL, url.isFileURL {
+                // 对于文件URL，确保它可以被外部应用访问
+                url.startAccessingSecurityScopedResource()
+                
+                // 为文件创建一个FileManager共享实例
+                let resourceValues = try? url.resourceValues(forKeys: [.fileSizeKey])
+                let _ = resourceValues?.fileSize  // 触发访问
+                
+                // 确保保持权限直到分享完成
+                context.coordinator.securityScopedURLs.append(url)
+                
+                return url
+            }
+            return item
+        }
+        
         let controller = UIActivityViewController(
-            activityItems: items,
+            activityItems: processedItems,
             applicationActivities: activities
         )
         
         // 分享完成或取消后关闭分享面板
         controller.completionWithItemsHandler = { (activityType, completed, returnedItems, error) in
+            // 释放所有安全域URL的访问权限
+            for url in context.coordinator.securityScopedURLs {
+                url.stopAccessingSecurityScopedResource()
+            }
+            
             DispatchQueue.main.async {
                 self.presentationMode.wrappedValue.dismiss()
             }
@@ -1427,6 +1510,21 @@ struct ShareViewController: UIViewControllerRepresentable {
     }
     
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+    
+    class Coordinator: NSObject {
+        var securityScopedURLs: [URL] = []
+        
+        deinit {
+            // 以防completionHandler未被调用的安全措施
+            for url in securityScopedURLs {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+    }
 }
 
 // MARK: - Previews

@@ -207,7 +207,31 @@ class PanoramaMediaManager: NSObject, ObservableObject {
             options: options
         ) { avAsset, _, _ in
             if let urlAsset = avAsset as? AVURLAsset {
-                completion(urlAsset.url)
+                // 创建本地临时文件，确保具有完整权限
+                let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                let uniqueFileName = UUID().uuidString + ".mov"
+                let localURL = documentsDirectory.appendingPathComponent(uniqueFileName)
+                
+                do {
+                    // 如果已存在同名文件，先删除
+                    if FileManager.default.fileExists(atPath: localURL.path) {
+                        try FileManager.default.removeItem(at: localURL)
+                    }
+                    
+                    // 复制视频文件到本地
+                    try FileManager.default.copyItem(at: urlAsset.url, to: localURL)
+                    
+                    // 设置文件属性，确保文件可被分享
+                    var resourceValues = URLResourceValues()
+                    resourceValues.isExcludedFromBackup = true
+                    try localURL.setResourceValues(resourceValues)
+                    
+                    // 返回本地URL
+                    completion(localURL)
+                } catch {
+                    print("❌ Error creating local video copy: \(error)")
+                    completion(nil)
+                }
             } else {
                 completion(nil)
             }
