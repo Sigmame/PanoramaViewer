@@ -240,13 +240,13 @@ class PanoramaMediaManager: NSObject, ObservableObject {
                     
                     // 添加额外的UTI类型提示 - 使用contentType而不是typeIdentifier
                     if fileExtension == "mov" {
-                        try localURL.setResourceValues(URLResourceValues(dictionary: [
-                            .contentTypeKey: UTType.quickTimeMovie
-                        ]))
+                        var resourceValues = URLResourceValues()
+                        resourceValues.contentType = UTType.quickTimeMovie
+                        try localURL.setResourceValues(resourceValues)
                     } else if fileExtension == "mp4" {
-                        try localURL.setResourceValues(URLResourceValues(dictionary: [
-                            .contentTypeKey: UTType.mpeg4Movie
-                        ]))
+                        var resourceValues = URLResourceValues()
+                        resourceValues.contentType = UTType.mpeg4Movie
+                        try localURL.setResourceValues(resourceValues)
                     }
                     
                     // 验证文件是否可访问
