@@ -5,4 +5,7 @@
 "cancel" = "Cancel";
 "need_photo_access" = "Photo Library Access Required";
 "allow_access_description" = "Please allow access to view panoramic photos and videos";
-"go_to_settings" = "Go to Settings"; 
+"go_to_settings" = "Go to Settings";
+"no_content_to_share" = "No content to share";
+"share" = "Share";
+"select_action" = "Select Action"; 

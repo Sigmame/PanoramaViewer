@@ -623,6 +623,7 @@ struct ContentView: View {
     @State private var videoCoordinator: PanoramaVideoView.Coordinator?
     @State private var isMuted = false
     @State private var videoProgress: Double = 0
+    @State private var isSharePresented = false // 新增：分享面板状态
     
     @Environment(\.verticalSizeClass) var verticalSizeClass
     
@@ -771,6 +772,18 @@ struct ContentView: View {
             // 重置播放状态
             isPlaying = true
         }
+        // 添加分享面板
+        .sheet(isPresented: $isSharePresented) {
+            if let image = selectedImage, mediaType == .image {
+                ShareViewController(items: [image], activities: nil)
+            } else if let videoURL = selectedVideoURL, mediaType == .video {
+                ShareViewController(items: [videoURL], activities: nil)
+            } else {
+                // 防止在没有内容时打开分享面板
+                Text("no_content_to_share".localized())
+                    .padding()
+            }
+        }
     }
     
     private func loadAndDisplayMedia(_ media: PanoramaMedia) {
@@ -806,7 +819,7 @@ struct ContentView: View {
     
     private var mediaControls: some View {
         VStack {
-            // 顶部返回按钮
+            // 顶部控制按钮
             HStack {
                 Button(action: {
                     // 如果当前是视频，先清理音频会话和播放器
@@ -832,7 +845,20 @@ struct ContentView: View {
                         .background(Color.black.opacity(0.5))
                         .clipShape(Circle())
                 }
+                
                 Spacer()
+                
+                // 添加分享按钮
+                Button(action: {
+                    isSharePresented = true
+                }) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                        .padding()
+                        .background(Color.black.opacity(0.5))
+                        .clipShape(Circle())
+                }
             }
             .padding()
             
@@ -905,6 +931,10 @@ struct MediaThumbnailView: View {
     let media: PanoramaMedia
     let onTap: (PanoramaMedia) -> Void
     @Environment(\.verticalSizeClass) var verticalSizeClass
+    @State private var showingOptions = false
+    @EnvironmentObject var mediaManager: PanoramaMediaManager
+    @State private var isSharePresented = false
+    @State private var shareableItem: Any? = nil
     
     var body: some View {
         GeometryReader { geometry in
@@ -937,8 +967,57 @@ struct MediaThumbnailView: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: verticalSizeClass == .regular ? 100 : 80)
             }
+            .contextMenu {
+                Button(action: {
+                    prepareForSharing()
+                }) {
+                    Label("share".localized(), systemImage: "square.and.arrow.up")
+                }
+            }
+            .onLongPressGesture {
+                showingOptions = true
+            }
         }
         .frame(height: verticalSizeClass == .regular ? 100 : 80)
+        .actionSheet(isPresented: $showingOptions) {
+            ActionSheet(
+                title: Text("select_action".localized()),
+                buttons: [
+                    .default(Text("share".localized())) {
+                        prepareForSharing()
+                    },
+                    .cancel()
+                ]
+            )
+        }
+        .sheet(isPresented: $isSharePresented) {
+            if let item = shareableItem {
+                ShareViewController(items: [item], activities: nil)
+            }
+        }
+    }
+    
+    private func prepareForSharing() {
+        switch media.type {
+        case .image:
+            mediaManager.loadFullResolutionImage(for: media.asset) { image in
+                if let image = image {
+                    DispatchQueue.main.async {
+                        self.shareableItem = image
+                        self.isSharePresented = true
+                    }
+                }
+            }
+        case .video:
+            mediaManager.loadVideo(for: media.asset) { url in
+                if let url = url {
+                    DispatchQueue.main.async {
+                        self.shareableItem = url
+                        self.isSharePresented = true
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1147,6 +1226,31 @@ struct UnifiedFilePicker: UIViewControllerRepresentable {
             }
         }
     }
+}
+
+// MARK: - ShareViewController
+struct ShareViewController: UIViewControllerRepresentable {
+    let items: [Any]
+    let activities: [UIActivity]?
+    @Environment(\.presentationMode) var presentationMode
+    
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(
+            activityItems: items,
+            applicationActivities: activities
+        )
+        
+        // 分享完成或取消后关闭分享面板
+        controller.completionWithItemsHandler = { (activityType, completed, returnedItems, error) in
+            DispatchQueue.main.async {
+                self.presentationMode.wrappedValue.dismiss()
+            }
+        }
+        
+        return controller
+    }
+    
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 // MARK: - Previews

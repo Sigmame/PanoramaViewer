@@ -5,4 +5,7 @@
 "cancel" = "取消";
 "need_photo_access" = "需要访问相册权限";
 "allow_access_description" = "请允许访问相册以查看全景照片和视频";
-"go_to_settings" = "前往设置"; 
+"go_to_settings" = "前往设置";
+"no_content_to_share" = "没有可分享的内容";
+"share" = "分享";
+"select_action" = "选择操作"; 

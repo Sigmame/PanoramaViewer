@@ -1,0 +1,32 @@
+# PanoramaViewer项目 - 添加图片/视频选择和分享功能
+
+## 需求分析
+1. 在首页增加选择图片或视频的功能
+2. 支持airdrop等分享功能（类似iOS图库功能）
+
+## 现有功能
+- 应用已支持从相册选择全景图片和视频
+- 应用使用SwiftUI和SceneKit构建
+- 已有相册权限请求和基本的媒体管理功能
+- 已有图片和视频的加载与显示功能
+
+## 实现步骤
+[X] 1. 添加UIActivityViewController支持分享功能
+[X] 2. 更新ContentView添加分享按钮
+[X] 3. 实现图片和视频分享的不同处理逻辑
+[X] 4. 更新本地化文件，添加分享相关文本
+[X] 5. 测试分享功能是否正常工作
+
+## 技术要点
+- UIActivityViewController可以用于实现iOS标准分享功能
+- 需要在UIViewControllerRepresentable中包装UIActivityViewController
+- 需要区分处理图片和视频的分享逻辑
+- 图片分享需要UIImage，视频分享需要URL 
+
+## 实现总结
+我们成功地实现了以下功能：
+1. 创建了ShareViewController来封装iOS原生分享功能
+2. 在全景图片和视频查看界面添加了分享按钮
+3. 在媒体缩略图上添加了长按分享功能
+4. 针对图片和视频实现了不同的分享处理逻辑
+5. 添加了相关的中英文本地化支持 
