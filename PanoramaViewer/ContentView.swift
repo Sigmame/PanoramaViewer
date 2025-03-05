@@ -1574,121 +1574,165 @@ class FileActivityItemSource: NSObject, UIActivityItemSource {
     private let url: URL
     private let urlAccess: URLAccess
     private var hasStartedSharing: Bool = false
+    private var activityType: UIActivity.ActivityType?
+    private var lastAccessTime: Date?
+    private var accessCount: Int = 0
     
     init(url: URL, coordinatorQueue: inout [URLAccess]) {
         self.url = url
         self.urlAccess = URLAccess(url: url)
         super.init()
         
+        print("\n📤 [FileActivityItemSource] Initializing for file: \(url.lastPathComponent)")
+        print("  - File path: \(url.path)")
+        print("  - Is file URL: \(url.isFileURL)")
+        
         // 立即开始访问并添加到跟踪队列
         let success = urlAccess.startAccess()
-        print("🔒 Initializing FileActivityItemSource for: \(url.lastPathComponent), access success: \(success)")
+        accessCount += 1
+        lastAccessTime = Date()
+        
+        print("  - Initial access success: \(success)")
+        print("  - Access count: \(accessCount)")
+        
         if success {
             coordinatorQueue.append(urlAccess)
             
-            // 验证文件
-            if FileManager.default.isReadableFile(atPath: url.path) {
-                // 尝试获取文件属性
-                do {
-                    // 确保文件权限正确
-                    try FileManager.default.setAttributes([
-                        .posixPermissions: 0o644 // 设置为所有用户可读写
-                    ], ofItemAtPath: url.path)
-                    
-                    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-                    if let fileSize = attributes[.size] as? UInt64 {
-                        print("📊 File size: \(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))")
-                    }
-                    if let permissions = attributes[.posixPermissions] as? NSNumber {
-                        print("🔑 File permissions: \(String(format: "%o", permissions.intValue))")
-                    }
-                } catch {
-                    print("⚠️ Failed to get/set file attributes: \(error)")
-                }
-            } else {
-                print("❌ File is NOT readable: \(url.path)")
+            // 验证文件状态
+            do {
+                let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+                print("\n📄 File Status:")
+                print("  - Exists: \(FileManager.default.fileExists(atPath: url.path))")
+                print("  - Is readable: \(FileManager.default.isReadableFile(atPath: url.path))")
+                print("  - Size: \(ByteCountFormatter.string(fromByteCount: Int64(attributes[.size] as? UInt64 ?? 0), countStyle: .file))")
+                print("  - Creation date: \(attributes[.creationDate] as? Date ?? Date())")
+                print("  - Permissions: \(String(format: "%o", attributes[.posixPermissions] as? Int ?? 0))")
+                print("  - Owner: \(attributes[.ownerAccountName] as? String ?? "unknown")")
+                
+                // 确保文件权限正确
+                try FileManager.default.setAttributes([
+                    .posixPermissions: 0o644
+                ], ofItemAtPath: url.path)
+                
+                // 再次验证权限
+                let updatedAttributes = try FileManager.default.attributesOfItem(atPath: url.path)
+                print("  - Updated permissions: \(String(format: "%o", updatedAttributes[.posixPermissions] as? Int ?? 0))")
+                
+                // 验证文件类型
+                let typeIdentifier = try url.resourceValues(forKeys: [.typeIdentifierKey]).typeIdentifier ?? "unknown"
+                print("  - UTI type: \(typeIdentifier)")
+            } catch {
+                print("❌ File verification error: \(error.localizedDescription)")
             }
         } else {
-            print("❌ Failed to start accessing security-scoped resource: \(url.lastPathComponent)")
+            print("❌ Failed to start accessing security-scoped resource")
         }
     }
     
     deinit {
-        print("🧹 FileActivityItemSource deinit for: \(url.lastPathComponent)")
+        print("\n🧹 [FileActivityItemSource] Deinit")
+        print("  - File: \(url.lastPathComponent)")
+        print("  - Total access count: \(accessCount)")
+        print("  - Last access time: \(String(describing: lastAccessTime))")
+        print("  - Activity type: \(String(describing: activityType?.rawValue))")
+        print("  - Has started sharing: \(hasStartedSharing)")
     }
     
-    // 提供占位项
     func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
+        print("\n📋 [Placeholder] Requested for: \(url.lastPathComponent)")
         return url.lastPathComponent
     }
     
-    // 提供实际项目
     func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
-        print("📤 Providing URL for activity type: \(String(describing: activityType?.rawValue))")
+        print("\n📤 [ItemForActivity] Type: \(String(describing: activityType?.rawValue))")
+        print("  - File: \(url.lastPathComponent)")
         
-        // 确保我们仍然有文件访问权限
+        self.activityType = activityType
+        
+        // 验证文件状态
+        let fileExists = FileManager.default.fileExists(atPath: url.path)
+        let isReadable = FileManager.default.isReadableFile(atPath: url.path)
+        
+        print("  - File exists: \(fileExists)")
+        print("  - Is readable: \(isReadable)")
+        print("  - Current access status: \(urlAccess.isAccessing)")
+        
+        // 如果没有访问权限，重新获取
         if !urlAccess.isAccessing {
+            print("  - Attempting to reacquire access")
             let success = urlAccess.startAccess()
-            print("  - Started access again: \(success)")
+            accessCount += 1
+            lastAccessTime = Date()
+            print("  - Reacquired access: \(success)")
+            print("  - Total access count: \(accessCount)")
+            
             if !success {
                 print("❌ Failed to reacquire security-scoped resource access")
                 return nil
             }
         }
         
-        // 检查文件是否存在
-        let fileExists = FileManager.default.fileExists(atPath: url.path)
-        print("  - File exists: \(fileExists)")
-        if !fileExists {
-            print("❌ File no longer exists at path: \(url.path)")
-            return nil
-        }
-        
-        // 验证文件是否可读
-        let isReadable = FileManager.default.isReadableFile(atPath: url.path)
-        print("  - File is readable: \(isReadable)")
-        if !isReadable {
-            print("❌ File is not readable: \(url.path)")
-            return nil
+        // 验证文件属性
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            print("\n📄 Current File Status:")
+            print("  - Size: \(ByteCountFormatter.string(fromByteCount: Int64(attributes[.size] as? UInt64 ?? 0), countStyle: .file))")
+            print("  - Permissions: \(String(format: "%o", attributes[.posixPermissions] as? Int ?? 0))")
+            
+            // 对于AirDrop，确保文件权限正确
+            if activityType?.rawValue == "com.apple.UIKit.activity.AirDrop" {
+                print("  - Setting permissions for AirDrop")
+                try FileManager.default.setAttributes([
+                    .posixPermissions: 0o644
+                ], ofItemAtPath: url.path)
+            }
+        } catch {
+            print("❌ File attribute error: \(error.localizedDescription)")
         }
         
         hasStartedSharing = true
         return url
     }
     
-    // 确保在AirDrop过程中保持文件访问权限
-    func activityViewController(_ activityViewController: UIActivityViewController, 
-                               dataTypeIdentifierForActivityType activityType: UIActivity.ActivityType?) -> String {
-        // 如果是AirDrop，确保我们的文件访问权限仍然有效
-        if activityType?.rawValue == "com.apple.UIKit.activity.AirDrop" {
-            print("🔄 AirDrop activity detected, ensuring file access")
-            if !urlAccess.isAccessing {
-                let success = urlAccess.startAccess()
-                print("  - Refreshed access for AirDrop: \(success)")
-            } else {
-                print("  - Access still valid for AirDrop")
-            }
+    func activityViewController(_ activityViewController: UIActivityViewController, dataTypeIdentifierForActivityType activityType: UIActivity.ActivityType?) -> String {
+        print("\n🏷 [DataTypeIdentifier] Requested")
+        print("  - Activity type: \(String(describing: activityType?.rawValue))")
+        print("  - File extension: \(url.pathExtension.lowercased())")
+        
+        // 确保文件访问权限
+        if !urlAccess.isAccessing {
+            print("  - Refreshing access for data type request")
+            let success = urlAccess.startAccess()
+            accessCount += 1
+            lastAccessTime = Date()
+            print("  - Access refresh result: \(success)")
         }
         
-        // 确定并返回适当的UTI
-        if url.pathExtension.lowercased() == "mov" {
-            return "com.apple.quicktime-movie"
-        } else if url.pathExtension.lowercased() == "mp4" {
-            return "public.mpeg-4"
-        } else if url.pathExtension.lowercased() == "jpg" || url.pathExtension.lowercased() == "jpeg" {
-            return "public.jpeg"
-        } else if url.pathExtension.lowercased() == "png" {
-            return "public.png"
+        let typeIdentifier: String
+        switch url.pathExtension.lowercased() {
+        case "mov":
+            typeIdentifier = "com.apple.quicktime-movie"
+        case "mp4":
+            typeIdentifier = "public.mpeg-4"
+        case "jpg", "jpeg":
+            typeIdentifier = "public.jpeg"
+        case "png":
+            typeIdentifier = "public.png"
+        default:
+            typeIdentifier = "public.data"
         }
         
-        // 默认为通用数据类型
-        return "public.data"
+        print("  - Selected type identifier: \(typeIdentifier)")
+        return typeIdentifier
     }
     
-    // 提供缩略图
     func activityViewController(_ activityViewController: UIActivityViewController, 
-                               thumbnailImageForActivityType activityType: UIActivity.ActivityType?, 
-                               suggestedSize size: CGSize) -> UIImage? {
+                              thumbnailImageForActivityType activityType: UIActivity.ActivityType?, 
+                              suggestedSize size: CGSize) -> UIImage? {
+        print("\n🖼 [Thumbnail] Requested")
+        print("  - Activity type: \(String(describing: activityType?.rawValue))")
+        print("  - Suggested size: \(size)")
+        
         // 为视频生成缩略图
         if url.pathExtension.lowercased() == "mov" || url.pathExtension.lowercased() == "mp4" {
             let asset = AVAsset(url: url)
@@ -1696,20 +1740,22 @@ class FileActivityItemSource: NSObject, UIActivityItemSource {
             imageGenerator.appliesPreferredTrackTransform = true
             
             do {
-                let cgImage = try imageGenerator.copyCGImage(at: CMTime(seconds: 0, preferredTimescale: 1), actualTime: nil)
+                let cgImage = try imageGenerator.copyCGImage(at: CMTime.zero, actualTime: nil)
+                print("  - Thumbnail generated successfully")
                 return UIImage(cgImage: cgImage)
             } catch {
-                print("⚠️ Failed to generate video thumbnail: \(error)")
+                print("❌ Thumbnail generation failed: \(error.localizedDescription)")
                 return nil
             }
         }
         return nil
     }
     
-    // 提供标题
     func activityViewController(_ activityViewController: UIActivityViewController, 
-                               subjectForActivityType activityType: UIActivity.ActivityType?) -> String {
-        return url.deletingPathExtension().lastPathComponent
+                              subjectForActivityType activityType: UIActivity.ActivityType?) -> String {
+        let subject = url.deletingPathExtension().lastPathComponent
+        print("\n📝 [Subject] Requested: \(subject)")
+        return subject
     }
 }
 
