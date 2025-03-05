@@ -211,39 +211,39 @@ class PanoramaMediaManager: NSObject, ObservableObject {
             if let urlAsset = avAsset as? AVURLAsset {
                 print("🎥 获取到视频资源URL: \(urlAsset.url.lastPathComponent)")
                 
-                // 获取系统临时目录
-                let tempDir = FileManager.default.temporaryDirectory
+                // 使用 Documents 目录而不是临时目录
+                let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 let originalExtension = urlAsset.url.pathExtension.isEmpty ? "mp4" : urlAsset.url.pathExtension
-                let tempURL = tempDir.appendingPathComponent(UUID().uuidString + "." + originalExtension)
+                let localURL = documentsDir.appendingPathComponent("share_" + UUID().uuidString + "." + originalExtension)
                 
                 do {
-                    // 如果临时文件已存在，先删除
-                    if FileManager.default.fileExists(atPath: tempURL.path) {
-                        try FileManager.default.removeItem(at: tempURL)
-                        print("🗑 删除已存在的临时文件")
+                    // 如果文件已存在，先删除
+                    if FileManager.default.fileExists(atPath: localURL.path) {
+                        try FileManager.default.removeItem(at: localURL)
+                        print("🗑 删除已存在的文件")
                     }
                     
-                    // 复制文件到临时目录
-                    try FileManager.default.copyItem(at: urlAsset.url, to: tempURL)
-                    print("📁 创建临时文件副本: \(tempURL.lastPathComponent)")
+                    // 复制文件
+                    try FileManager.default.copyItem(at: urlAsset.url, to: localURL)
+                    print("📁 创建文件副本: \(localURL.lastPathComponent)")
                     
                     // 设置文件权限为所有用户可读写
                     try FileManager.default.setAttributes([
                         .posixPermissions: 0o644
-                    ], ofItemAtPath: tempURL.path)
+                    ], ofItemAtPath: localURL.path)
                     
                     // 验证文件状态
-                    let attributes = try FileManager.default.attributesOfItem(atPath: tempURL.path)
-                    print("📄 临时文件状态:")
+                    let attributes = try FileManager.default.attributesOfItem(atPath: localURL.path)
+                    print("📄 文件状态:")
                     print("  - 大小: \(ByteCountFormatter.string(fromByteCount: Int64(attributes[.size] as? UInt64 ?? 0), countStyle: .file))")
                     print("  - 权限: \(String(format: "%o", attributes[.posixPermissions] as? Int ?? 0))")
-                    print("  - 可读: \(FileManager.default.isReadableFile(atPath: tempURL.path))")
+                    print("  - 可读: \(FileManager.default.isReadableFile(atPath: localURL.path))")
                     
                     DispatchQueue.main.async {
-                        completion(tempURL)
+                        completion(localURL)
                     }
                 } catch {
-                    print("❌ 创建临时文件失败: \(error.localizedDescription)")
+                    print("❌ 创建文件失败: \(error.localizedDescription)")
                     DispatchQueue.main.async {
                         completion(nil)
                     }
