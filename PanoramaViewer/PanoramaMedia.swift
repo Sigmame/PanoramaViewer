@@ -208,59 +208,17 @@ class PanoramaMediaManager: NSObject, ObservableObject {
             options: options
         ) { avAsset, audioMix, info in
             if let urlAsset = avAsset as? AVURLAsset {
-                // 检查原始视频的文件扩展名，确保使用正确的扩展名
-                let originalExtension = urlAsset.url.pathExtension.lowercased()
-                let fileExtension = originalExtension.isEmpty ? "mp4" : originalExtension
+                print("🎥 获取到视频资源URL: \(urlAsset.url.lastPathComponent)")
                 
-                // 仅使用临时目录，而不是应用的文档目录
-                let tempDirectory = FileManager.default.temporaryDirectory
-                let uniqueFileName = UUID().uuidString + "." + fileExtension
-                var localURL = tempDirectory.appendingPathComponent(uniqueFileName)
-                
-                do {
-                    // 如果已存在同名文件，先删除
-                    if FileManager.default.fileExists(atPath: localURL.path) {
-                        try FileManager.default.removeItem(at: localURL)
-                    }
-                    
-                    print("🎥 准备复制视频文件: \(urlAsset.url.lastPathComponent) -> \(localURL.lastPathComponent)")
-                    
-                    // 复制视频文件到临时目录
-                    try FileManager.default.copyItem(at: urlAsset.url, to: localURL)
-                    
-                    // 设置文件权限为所有用户可读写，这对AirDrop非常重要
-                    try FileManager.default.setAttributes([
-                        .posixPermissions: 0o644
-                    ], ofItemAtPath: localURL.path)
-                    
-                    // 设置文件属性，确保不会包含在备份中
-                    var resourceValues = URLResourceValues()
-                    resourceValues.isExcludedFromBackup = true
-                    try localURL.setResourceValues(resourceValues)
-                    
-                    // 验证文件是否可访问
-                    let isReadable = FileManager.default.isReadableFile(atPath: localURL.path)
-                    print(isReadable ? "✅ 视频文件可读" : "⚠️ 视频文件不可读")
-                    
-                    // 检查文件大小
-                    let attributes = try FileManager.default.attributesOfItem(atPath: localURL.path)
-                    if let fileSize = attributes[.size] as? UInt64 {
-                        print("📊 视频文件大小: \(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))")
-                    }
-                    
-                    if let posixPermissions = attributes[.posixPermissions] as? NSNumber {
-                        print("🔑 文件权限: \(String(format: "%o", posixPermissions.intValue))")
-                    }
-                    
-                    // 返回本地URL
-                    completion(localURL)
-                } catch {
-                    print("❌ 创建本地视频副本失败: \(error.localizedDescription)")
-                    completion(nil)
+                // 直接使用原始URL进行分享
+                DispatchQueue.main.async {
+                    completion(urlAsset.url)
                 }
             } else {
                 print("❌ 无法获取视频资源")
-                completion(nil)
+                DispatchQueue.main.async {
+                    completion(nil)
+                }
             }
         }
     }

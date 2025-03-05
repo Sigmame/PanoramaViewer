@@ -1666,34 +1666,12 @@ class FileActivityItemSource: NSObject, UIActivityItemSource {
                 print("  - Creation date: \(attributes[.creationDate] as? Date ?? Date())")
                 print("  - Permissions: \(String(format: "%o", attributes[.posixPermissions] as? Int ?? 0))")
                 print("  - Owner: \(attributes[.ownerAccountName] as? String ?? "unknown")")
-                
-                // 确保文件权限正确
-                try FileManager.default.setAttributes([
-                    .posixPermissions: 0o644
-                ], ofItemAtPath: url.path)
-                
-                // 再次验证权限
-                let updatedAttributes = try FileManager.default.attributesOfItem(atPath: url.path)
-                print("  - Updated permissions: \(String(format: "%o", updatedAttributes[.posixPermissions] as? Int ?? 0))")
-                
-                // 验证文件类型
-                let typeIdentifier = try url.resourceValues(forKeys: [.typeIdentifierKey]).typeIdentifier ?? "unknown"
-                print("  - UTI type: \(typeIdentifier)")
             } catch {
                 print("❌ File verification error: \(error.localizedDescription)")
             }
         } else {
             print("❌ Failed to start accessing security-scoped resource")
         }
-    }
-    
-    deinit {
-        print("\n🧹 [FileActivityItemSource] Deinit")
-        print("  - File: \(url.lastPathComponent)")
-        print("  - Total access count: \(accessCount)")
-        print("  - Last access time: \(String(describing: lastAccessTime))")
-        print("  - Activity type: \(String(describing: activityType?.rawValue))")
-        print("  - Has started sharing: \(hasStartedSharing)")
     }
     
     func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
@@ -1728,24 +1706,6 @@ class FileActivityItemSource: NSObject, UIActivityItemSource {
                 print("❌ Failed to reacquire security-scoped resource access")
                 return nil
             }
-        }
-        
-        // 验证文件属性
-        do {
-            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-            print("\n📄 Current File Status:")
-            print("  - Size: \(ByteCountFormatter.string(fromByteCount: Int64(attributes[.size] as? UInt64 ?? 0), countStyle: .file))")
-            print("  - Permissions: \(String(format: "%o", attributes[.posixPermissions] as? Int ?? 0))")
-            
-            // 对于AirDrop，确保文件权限正确
-            if activityType?.rawValue == "com.apple.UIKit.activity.AirDrop" {
-                print("  - Setting permissions for AirDrop")
-                try FileManager.default.setAttributes([
-                    .posixPermissions: 0o644
-                ], ofItemAtPath: url.path)
-            }
-        } catch {
-            print("❌ File attribute error: \(error.localizedDescription)")
         }
         
         hasStartedSharing = true
@@ -1814,6 +1774,15 @@ class FileActivityItemSource: NSObject, UIActivityItemSource {
         let subject = url.deletingPathExtension().lastPathComponent
         print("\n📝 [Subject] Requested: \(subject)")
         return subject
+    }
+    
+    deinit {
+        print("\n🧹 [FileActivityItemSource] Deinit")
+        print("  - File: \(url.lastPathComponent)")
+        print("  - Total access count: \(accessCount)")
+        print("  - Last access time: \(String(describing: lastAccessTime))")
+        print("  - Activity type: \(String(describing: activityType?.rawValue))")
+        print("  - Has started sharing: \(hasStartedSharing)")
     }
 }
 
