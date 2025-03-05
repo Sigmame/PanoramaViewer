@@ -203,6 +203,7 @@ class PanoramaMediaManager: NSObject, ObservableObject {
         options.deliveryMode = .highQualityFormat
         options.isNetworkAccessAllowed = true
         
+        print("🎥 开始加载视频资源")
         imageManager.requestAVAsset(
             forVideo: asset,
             options: options
@@ -210,12 +211,48 @@ class PanoramaMediaManager: NSObject, ObservableObject {
             if let urlAsset = avAsset as? AVURLAsset {
                 print("🎥 获取到视频资源URL: \(urlAsset.url.lastPathComponent)")
                 
-                // 直接使用原始URL进行分享
-                DispatchQueue.main.async {
-                    completion(urlAsset.url)
+                // 获取系统临时目录
+                let tempDir = FileManager.default.temporaryDirectory
+                let originalExtension = urlAsset.url.pathExtension.isEmpty ? "mp4" : urlAsset.url.pathExtension
+                let tempURL = tempDir.appendingPathComponent(UUID().uuidString + "." + originalExtension)
+                
+                do {
+                    // 如果临时文件已存在，先删除
+                    if FileManager.default.fileExists(atPath: tempURL.path) {
+                        try FileManager.default.removeItem(at: tempURL)
+                        print("🗑 删除已存在的临时文件")
+                    }
+                    
+                    // 复制文件到临时目录
+                    try FileManager.default.copyItem(at: urlAsset.url, to: tempURL)
+                    print("📁 创建临时文件副本: \(tempURL.lastPathComponent)")
+                    
+                    // 设置文件权限为所有用户可读写
+                    try FileManager.default.setAttributes([
+                        .posixPermissions: 0o644
+                    ], ofItemAtPath: tempURL.path)
+                    
+                    // 验证文件状态
+                    let attributes = try FileManager.default.attributesOfItem(atPath: tempURL.path)
+                    print("📄 临时文件状态:")
+                    print("  - 大小: \(ByteCountFormatter.string(fromByteCount: Int64(attributes[.size] as? UInt64 ?? 0), countStyle: .file))")
+                    print("  - 权限: \(String(format: "%o", attributes[.posixPermissions] as? Int ?? 0))")
+                    print("  - 可读: \(FileManager.default.isReadableFile(atPath: tempURL.path))")
+                    
+                    DispatchQueue.main.async {
+                        completion(tempURL)
+                    }
+                } catch {
+                    print("❌ 创建临时文件失败: \(error.localizedDescription)")
+                    DispatchQueue.main.async {
+                        completion(nil)
+                    }
                 }
             } else {
                 print("❌ 无法获取视频资源")
+                if let error = info?[PHImageErrorKey] as? Error {
+                    print("  - 错误信息: \(error.localizedDescription)")
+                }
                 DispatchQueue.main.async {
                     completion(nil)
                 }

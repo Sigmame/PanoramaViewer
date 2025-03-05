@@ -1630,7 +1630,6 @@ class URLAccess {
 // 使用NSObject而不是UIActivityItemProvider，以更好地控制文件访问
 class FileActivityItemSource: NSObject, UIActivityItemSource {
     private let url: URL
-    private let urlAccess: URLAccess
     private var hasStartedSharing: Bool = false
     private var activityType: UIActivity.ActivityType?
     private var lastAccessTime: Date?
@@ -1638,39 +1637,24 @@ class FileActivityItemSource: NSObject, UIActivityItemSource {
     
     init(url: URL, coordinatorQueue: inout [URLAccess]) {
         self.url = url
-        self.urlAccess = URLAccess(url: url)
         super.init()
         
         print("\n📤 [FileActivityItemSource] Initializing for file: \(url.lastPathComponent)")
         print("  - File path: \(url.path)")
         print("  - Is file URL: \(url.isFileURL)")
         
-        // 立即开始访问并添加到跟踪队列
-        let success = urlAccess.startAccess()
-        accessCount += 1
-        lastAccessTime = Date()
-        
-        print("  - Initial access success: \(success)")
-        print("  - Access count: \(accessCount)")
-        
-        if success {
-            coordinatorQueue.append(urlAccess)
-            
-            // 验证文件状态
-            do {
-                let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-                print("\n📄 File Status:")
-                print("  - Exists: \(FileManager.default.fileExists(atPath: url.path))")
-                print("  - Is readable: \(FileManager.default.isReadableFile(atPath: url.path))")
-                print("  - Size: \(ByteCountFormatter.string(fromByteCount: Int64(attributes[.size] as? UInt64 ?? 0), countStyle: .file))")
-                print("  - Creation date: \(attributes[.creationDate] as? Date ?? Date())")
-                print("  - Permissions: \(String(format: "%o", attributes[.posixPermissions] as? Int ?? 0))")
-                print("  - Owner: \(attributes[.ownerAccountName] as? String ?? "unknown")")
-            } catch {
-                print("❌ File verification error: \(error.localizedDescription)")
-            }
-        } else {
-            print("❌ Failed to start accessing security-scoped resource")
+        // 验证文件状态
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            print("\n📄 File Status:")
+            print("  - Exists: \(FileManager.default.fileExists(atPath: url.path))")
+            print("  - Is readable: \(FileManager.default.isReadableFile(atPath: url.path))")
+            print("  - Size: \(ByteCountFormatter.string(fromByteCount: Int64(attributes[.size] as? UInt64 ?? 0), countStyle: .file))")
+            print("  - Creation date: \(attributes[.creationDate] as? Date ?? Date())")
+            print("  - Permissions: \(String(format: "%o", attributes[.posixPermissions] as? Int ?? 0))")
+            print("  - Owner: \(attributes[.ownerAccountName] as? String ?? "unknown")")
+        } catch {
+            print("❌ File verification error: \(error.localizedDescription)")
         }
     }
     
@@ -1691,21 +1675,10 @@ class FileActivityItemSource: NSObject, UIActivityItemSource {
         
         print("  - File exists: \(fileExists)")
         print("  - Is readable: \(isReadable)")
-        print("  - Current access status: \(urlAccess.isAccessing)")
         
-        // 如果没有访问权限，重新获取
-        if !urlAccess.isAccessing {
-            print("  - Attempting to reacquire access")
-            let success = urlAccess.startAccess()
-            accessCount += 1
-            lastAccessTime = Date()
-            print("  - Reacquired access: \(success)")
-            print("  - Total access count: \(accessCount)")
-            
-            if !success {
-                print("❌ Failed to reacquire security-scoped resource access")
-                return nil
-            }
+        if !fileExists || !isReadable {
+            print("❌ File is not accessible")
+            return nil
         }
         
         hasStartedSharing = true
@@ -1716,15 +1689,6 @@ class FileActivityItemSource: NSObject, UIActivityItemSource {
         print("\n🏷 [DataTypeIdentifier] Requested")
         print("  - Activity type: \(String(describing: activityType?.rawValue))")
         print("  - File extension: \(url.pathExtension.lowercased())")
-        
-        // 确保文件访问权限
-        if !urlAccess.isAccessing {
-            print("  - Refreshing access for data type request")
-            let success = urlAccess.startAccess()
-            accessCount += 1
-            lastAccessTime = Date()
-            print("  - Access refresh result: \(success)")
-        }
         
         let typeIdentifier: String
         switch url.pathExtension.lowercased() {
