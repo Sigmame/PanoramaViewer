@@ -257,7 +257,7 @@ class PanoramaMediaManager: NSObject, ObservableObject {
             } catch {
                 print("\n❌ 文件操作失败:")
                 print("  - 错误: \(error.localizedDescription)")
-                if let nsError = error as NSError {
+                if let nsError = error as? NSError {
                     print("  - Domain: \(nsError.domain)")
                     print("  - Code: \(nsError.code)")
                     print("  - Description: \(nsError.localizedDescription)")
