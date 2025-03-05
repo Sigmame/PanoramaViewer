@@ -848,14 +848,11 @@ struct ContentView: View {
         }
         // 添加分享面板
         .sheet(isPresented: $isSharePresented) {
-            if let image = selectedImage, mediaType == .image {
-                ShareViewController(items: [image], activities: nil)
+            if mediaType == .image {
+                // 显示加载指示器
+                LoadingView(message: "preparing_media".localized())
             } else if let videoURL = selectedVideoURL, mediaType == .video {
                 ShareViewController(items: [videoURL], activities: nil)
-            } else {
-                // 防止在没有内容时打开分享面板
-                Text("no_content_to_share".localized())
-                    .padding()
             }
         }
     }
@@ -1748,6 +1745,18 @@ class FileActivityItemSource: NSObject, UIActivityItemSource {
         print("  - Last access time: \(String(describing: lastAccessTime))")
         print("  - Activity type: \(String(describing: activityType?.rawValue))")
         print("  - Has started sharing: \(hasStartedSharing)")
+    }
+}
+
+struct LoadingView: View {
+    let message: String
+    
+    var body: some View {
+        VStack {
+            ProgressView()
+                .padding()
+            Text(message)
+        }
     }
 }
 

@@ -200,45 +200,6 @@ class PanoramaMediaManager: NSObject, ObservableObject {
             
             print("🖼 获取到图片数据: \(ByteCountFormatter.string(fromByteCount: Int64(imageData.count), countStyle: .file))")
             
-            // 检查图片大小是否需要压缩
-            if imageData.count > 10 * 1024 * 1024 { // 如果大于10MB
-                print("⚠️ 图片过大，进行压缩处理")
-                guard let image = UIImage(data: imageData) else {
-                    print("❌ 无法从数据创建图片")
-                    DispatchQueue.main.async {
-                        completion(nil)
-                    }
-                    return
-                }
-                
-                // 计算新的尺寸，保持宽高比
-                let maxDimension: CGFloat = 8192 // 设置最大尺寸
-                let scale = min(maxDimension / image.size.width, maxDimension / image.size.height)
-                let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-                
-                print("📏 调整图片尺寸:")
-                print("  - 原始尺寸: \(image.size)")
-                print("  - 新尺寸: \(newSize)")
-                
-                UIGraphicsBeginImageContext(newSize)
-                image.draw(in: CGRect(origin: .zero, size: newSize))
-                let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
-                UIGraphicsEndImageContext()
-                
-                // 压缩图片质量
-                let compressionQuality: CGFloat = 0.8
-                guard let compressedData = resizedImage?.jpegData(compressionQuality: compressionQuality) else {
-                    print("❌ 压缩图片失败")
-                    DispatchQueue.main.async {
-                        completion(nil)
-                    }
-                    return
-                }
-                
-                print("📦 压缩后大小: \(ByteCountFormatter.string(fromByteCount: Int64(compressedData.count), countStyle: .file))")
-                imageData = compressedData
-            }
-            
             // 使用 Documents 目录
             let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             
