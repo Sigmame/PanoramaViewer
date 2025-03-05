@@ -154,95 +154,115 @@ class PanoramaMediaManager: NSObject, ObservableObject {
         }
     }
     
-    func loadFullResolutionImage(for asset: PHAsset, completion: @escaping (UIImage?) -> Void) {
+    func loadFullResolutionImage(for asset: PHAsset, completion: @escaping (URL?) -> Void) {
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.isNetworkAccessAllowed = true
         options.isSynchronous = false
         options.version = .current
         
-        // 计算合适的目标尺寸，确保不超过 Metal 的纹理限制
-        let maxTextureSize: CGFloat = 16384
-        let aspectRatio = CGFloat(asset.pixelWidth) / CGFloat(asset.pixelHeight)
-        let targetSize: CGSize
-        
-        if CGFloat(asset.pixelWidth) > maxTextureSize || CGFloat(asset.pixelHeight) > maxTextureSize {
-            // 如果任一维度超过限制，按比例缩放
-            if aspectRatio > 1 {
-                let width = min(CGFloat(asset.pixelWidth), maxTextureSize)
-                let height = width / aspectRatio
-                targetSize = CGSize(width: width, height: height)
-            } else {
-                let height = min(CGFloat(asset.pixelHeight), maxTextureSize)
-                let width = height * aspectRatio
-                targetSize = CGSize(width: width, height: height)
-            }
-            print("⚠️ Image exceeds Metal texture size limit, scaling down to: \(targetSize)")
-        } else {
-            targetSize = CGSize(width: CGFloat(asset.pixelWidth), height: CGFloat(asset.pixelHeight))
-            print("📐 Loading image with original size: \(targetSize)")
-        }
+        print("🖼 开始加载图片资源")
+        print("  - Asset ID: \(asset.localIdentifier)")
+        print("  - 尺寸: \(asset.pixelWidth)x\(asset.pixelHeight)")
+        print("  - 创建时间: \(asset.creationDate?.description ?? "unknown")")
         
         // 获取原始图片数据
         let imageRequestOptions = PHImageRequestOptions()
         imageRequestOptions.deliveryMode = .highQualityFormat
         imageRequestOptions.isNetworkAccessAllowed = true
         imageRequestOptions.version = .current
+        imageRequestOptions.isNetworkAccessAllowed = true
         
-        print("🖼 开始加载图片资源")
-        PHImageManager.default().requestImageDataAndOrientation(for: asset, options: imageRequestOptions) { (data, _, _, info) in
-            if let imageData = data {
-                print("🖼 获取到图片数据: \(ByteCountFormatter.string(fromByteCount: Int64(imageData.count), countStyle: .file))")
-                
-                // 使用 Documents 目录
-                let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                let originalExtension = "jpg" // 默认使用 jpg
-                let localURL = documentsDir.appendingPathComponent("share_" + UUID().uuidString + "." + originalExtension)
-                
-                do {
-                    // 如果文件已存在，先删除
-                    if FileManager.default.fileExists(atPath: localURL.path) {
-                        try FileManager.default.removeItem(at: localURL)
-                        print("🗑 删除已存在的文件")
-                    }
-                    
-                    // 保存图片数据到文件
-                    try imageData.write(to: localURL)
-                    print("📁 创建文件副本: \(localURL.lastPathComponent)")
-                    
-                    // 设置文件权限为所有用户可读写
-                    try FileManager.default.setAttributes([
-                        .posixPermissions: 0o644
-                    ], ofItemAtPath: localURL.path)
-                    
-                    // 验证文件状态
-                    let attributes = try FileManager.default.attributesOfItem(atPath: localURL.path)
-                    print("📄 文件状态:")
-                    print("  - 大小: \(ByteCountFormatter.string(fromByteCount: Int64(attributes[.size] as? UInt64 ?? 0), countStyle: .file))")
-                    print("  - 权限: \(String(format: "%o", attributes[.posixPermissions] as? Int ?? 0))")
-                    print("  - 可读: \(FileManager.default.isReadableFile(atPath: localURL.path))")
-                    
-                    // 从文件加载图片
-                    if let image = UIImage(contentsOfFile: localURL.path) {
-                        DispatchQueue.main.async {
-                            completion(image)
-                        }
-                    } else {
-                        print("❌ 无法从文件加载图片")
-                        DispatchQueue.main.async {
-                            completion(nil)
-                        }
-                    }
-                } catch {
-                    print("❌ 创建文件失败: \(error.localizedDescription)")
-                    DispatchQueue.main.async {
-                        completion(nil)
-                    }
+        PHImageManager.default().requestImageDataAndOrientation(for: asset, options: imageRequestOptions) { (data, uti, orientation, info) in
+            print("\n📥 图片数据回调:")
+            print("  - UTI: \(uti ?? "unknown")")
+            print("  - Orientation: \(orientation.rawValue)")
+            
+            if let degraded = info?[PHImageResultIsDegradedKey] as? Bool {
+                print("  - Is Degraded: \(degraded)")
+            }
+            
+            if let error = info?[PHImageErrorKey] as? Error {
+                print("❌ 加载错误: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    completion(nil)
+                }
+                return
+            }
+            
+            guard let imageData = data else {
+                print("❌ 无法获取图片数据")
+                DispatchQueue.main.async {
+                    completion(nil)
+                }
+                return
+            }
+            
+            print("🖼 获取到图片数据: \(ByteCountFormatter.string(fromByteCount: Int64(imageData.count), countStyle: .file))")
+            
+            // 使用 Documents 目录
+            let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            
+            // 根据 UTI 确定文件扩展名
+            let fileExtension: String
+            if let uti = uti {
+                if uti.contains("jpeg") || uti.contains("jpg") {
+                    fileExtension = "jpg"
+                } else if uti.contains("png") {
+                    fileExtension = "png"
+                } else if uti.contains("heic") {
+                    fileExtension = "heic"
+                } else {
+                    fileExtension = "jpg"  // 默认使用 jpg
                 }
             } else {
-                print("❌ 无法获取图片数据")
-                if let error = info?[PHImageErrorKey] as? Error {
-                    print("  - 错误信息: \(error.localizedDescription)")
+                fileExtension = "jpg"
+            }
+            
+            let localURL = documentsDir.appendingPathComponent("share_" + UUID().uuidString + "." + fileExtension)
+            print("\n📁 准备创建文件:")
+            print("  - 路径: \(localURL.path)")
+            print("  - 扩展名: \(fileExtension)")
+            
+            do {
+                // 如果文件已存在，先删除
+                if FileManager.default.fileExists(atPath: localURL.path) {
+                    try FileManager.default.removeItem(at: localURL)
+                    print("🗑 删除已存在的文件")
+                }
+                
+                // 保存图片数据到文件
+                try imageData.write(to: localURL)
+                print("✅ 文件创建成功")
+                
+                // 设置文件权限为所有用户可读写
+                try FileManager.default.setAttributes([
+                    .posixPermissions: 0o644
+                ], ofItemAtPath: localURL.path)
+                print("✅ 文件权限设置成功")
+                
+                // 验证文件状态
+                let attributes = try FileManager.default.attributesOfItem(atPath: localURL.path)
+                print("\n📄 文件状态:")
+                print("  - 大小: \(ByteCountFormatter.string(fromByteCount: Int64(attributes[.size] as? UInt64 ?? 0), countStyle: .file))")
+                print("  - 权限: \(String(format: "%o", attributes[.posixPermissions] as? Int ?? 0))")
+                print("  - 创建时间: \(attributes[.creationDate] as? Date ?? Date())")
+                print("  - 所有者: \(attributes[.ownerAccountName] as? String ?? "unknown")")
+                print("  - 可读: \(FileManager.default.isReadableFile(atPath: localURL.path))")
+                print("  - 可写: \(FileManager.default.isWritableFile(atPath: localURL.path))")
+                
+                DispatchQueue.main.async {
+                    completion(localURL)
+                }
+            } catch {
+                print("\n❌ 文件操作失败:")
+                print("  - 错误: \(error.localizedDescription)")
+                if let nsError = error as NSError {
+                    print("  - Domain: \(nsError.domain)")
+                    print("  - Code: \(nsError.code)")
+                    print("  - Description: \(nsError.localizedDescription)")
+                    print("  - Failure Reason: \(nsError.localizedFailureReason ?? "unknown")")
+                    print("  - Recovery Suggestion: \(nsError.localizedRecoverySuggestion ?? "unknown")")
                 }
                 DispatchQueue.main.async {
                     completion(nil)

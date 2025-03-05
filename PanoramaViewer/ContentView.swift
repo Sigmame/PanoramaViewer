@@ -868,8 +868,9 @@ struct ContentView: View {
         
         switch media.type {
         case .image:
-            mediaManager.loadFullResolutionImage(for: media.asset) { image in
-                if let image = image {
+            mediaManager.loadFullResolutionImage(for: media.asset) { url in
+                if let url = url,
+                   let image = UIImage(contentsOfFile: url.path) {
                     DispatchQueue.main.async {
                         self.selectedVideoURL = nil  // 清除视频URL
                         self.selectedImage = image
@@ -1055,10 +1056,10 @@ struct ContentView: View {
         for media in selectedMedia {
             switch media.type {
             case .image:
-                mediaManager.loadFullResolutionImage(for: media.asset) { image in
-                    if let image = image {
+                mediaManager.loadFullResolutionImage(for: media.asset) { url in
+                    if let url = url {
                         DispatchQueue.main.async {
-                            self.shareableItems.append(image)
+                            self.shareableItems.append(url)
                             loadedItems += 1
                             
                             // 所有项目加载完毕时，显示分享面板
@@ -1224,11 +1225,11 @@ struct MediaThumbnailView: View {
         
         switch media.type {
         case .image:
-            mediaManager.loadFullResolutionImage(for: media.asset) { image in
-                if let image = image {
+            mediaManager.loadFullResolutionImage(for: media.asset) { url in
+                if let url = url {
                     DispatchQueue.main.async {
                         loadingAlert.dismiss(animated: true) {
-                            self.shareableItem = image
+                            self.shareableItem = url
                             self.isSharePresented = true
                         }
                     }
