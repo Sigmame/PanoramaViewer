@@ -1477,7 +1477,9 @@ struct ShareViewController: UIViewControllerRepresentable {
         let activityItems = items.map { item -> Any in
             if let url = item as? URL, url.isFileURL {
                 print("📤 Processing file URL for sharing: \(url.lastPathComponent)")
-                return FileActivityItemSource(url: url, coordinatorQueue: &context.coordinator.trackingURLs)
+                // 创建临时文件副本
+                let tempURL = createTempCopy(of: url)
+                return FileActivityItemSource(url: tempURL ?? url, coordinatorQueue: &context.coordinator.trackingURLs)
             } else if let image = item as? UIImage {
                 print("📤 Processing image for sharing")
                 return image
@@ -1504,13 +1506,40 @@ struct ShareViewController: UIViewControllerRepresentable {
             }
             
             // 延迟释放资源，确保AirDrop完成
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 context.coordinator.cleanupAll()
                 self.presentationMode.wrappedValue.dismiss()
             }
         }
         
         return controller
+    }
+    
+    // 创建临时文件副本
+    private func createTempCopy(of url: URL) -> URL? {
+        let tempDir = FileManager.default.temporaryDirectory
+        let tempURL = tempDir.appendingPathComponent(url.lastPathComponent)
+        
+        do {
+            // 如果已存在，先删除
+            if FileManager.default.fileExists(atPath: tempURL.path) {
+                try FileManager.default.removeItem(at: tempURL)
+            }
+            
+            // 复制文件
+            try FileManager.default.copyItem(at: url, to: tempURL)
+            
+            // 设置文件权限
+            try FileManager.default.setAttributes([
+                .posixPermissions: 0o644
+            ], ofItemAtPath: tempURL.path)
+            
+            print("📁 Created temporary copy at: \(tempURL.path)")
+            return tempURL
+        } catch {
+            print("❌ Failed to create temporary copy: \(error)")
+            return nil
+        }
     }
     
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
@@ -1521,13 +1550,27 @@ struct ShareViewController: UIViewControllerRepresentable {
     
     class Coordinator: NSObject {
         var trackingURLs: [URLAccess] = []
+        var tempFiles: [URL] = []
         
         func cleanupAll() {
-            print("🧹 Cleaning up \(trackingURLs.count) tracked URLs")
+            print("🧹 Cleaning up resources")
+            
+            // 清理临时文件
+            for url in tempFiles {
+                do {
+                    try FileManager.default.removeItem(at: url)
+                    print("  - Removed temp file: \(url.lastPathComponent)")
+                } catch {
+                    print("  - Failed to remove temp file: \(error)")
+                }
+            }
+            tempFiles.removeAll()
+            
+            // 停止访问权限
             for access in trackingURLs {
                 access.stopAccess()
             }
-            print("🧹 Released \(trackingURLs.count) security-scoped URLs")
+            print("  - Released \(trackingURLs.count) security-scoped URLs")
             trackingURLs.removeAll()
         }
         
@@ -1542,6 +1585,7 @@ struct ShareViewController: UIViewControllerRepresentable {
 class URLAccess {
     let url: URL
     private(set) var isAccessing: Bool = false
+    private var accessStartTime: Date?
     
     init(url: URL) {
         self.url = url
@@ -1549,17 +1593,31 @@ class URLAccess {
     }
     
     func startAccess() -> Bool {
-        guard !isAccessing else { return true }
+        // 如果已经在访问中，先停止之前的访问
+        if isAccessing {
+            stopAccess()
+        }
+        
+        // 尝试获取新的访问权限
         isAccessing = url.startAccessingSecurityScopedResource()
-        print("🔐 Started accessing: \(url.lastPathComponent), success: \(isAccessing)")
+        if isAccessing {
+            accessStartTime = Date()
+            print("🔐 Started accessing: \(url.lastPathComponent)")
+            print("  - Access time: \(accessStartTime?.description ?? "unknown")")
+        } else {
+            print("❌ Failed to start accessing: \(url.lastPathComponent)")
+        }
         return isAccessing
     }
     
     func stopAccess() {
         guard isAccessing else { return }
         url.stopAccessingSecurityScopedResource()
-        isAccessing = false
+        let duration = accessStartTime.map { Date().timeIntervalSince($0) } ?? 0
         print("🔓 Stopped accessing: \(url.lastPathComponent)")
+        print("  - Access duration: \(String(format: "%.2f", duration))s")
+        isAccessing = false
+        accessStartTime = nil
     }
     
     deinit {
