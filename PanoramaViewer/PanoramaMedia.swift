@@ -23,6 +23,30 @@ class PanoramaMediaManager: NSObject, ObservableObject {
     @Published var panoramaMedia: [PanoramaMedia] = []
     @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
     private let imageManager = PHImageManager.default()
+    var currentShareURL: URL? {
+        didSet {
+            if let oldURL = oldValue {
+                cleanupShareFile(at: oldURL)
+            }
+        }
+    }
+    
+    private func cleanupShareFile(at url: URL) {
+        do {
+            if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.removeItem(at: url)
+                print("🗑 清理旧的分享文件: \(url.lastPathComponent)")
+            }
+        } catch {
+            print("❌ 清理文件失败: \(error.localizedDescription)")
+        }
+    }
+    
+    deinit {
+        if let url = currentShareURL {
+            cleanupShareFile(at: url)
+        }
+    }
     
     override init() {
         super.init()

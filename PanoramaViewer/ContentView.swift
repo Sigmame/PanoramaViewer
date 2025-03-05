@@ -848,9 +848,8 @@ struct ContentView: View {
         }
         // 添加分享面板
         .sheet(isPresented: $isSharePresented) {
-            if mediaType == .image {
-                // 显示加载指示器
-                LoadingView(message: "preparing_media".localized())
+            if let url = mediaManager.currentShareURL, mediaType == .image {
+                ShareViewController(items: [url], activities: nil)
             } else if let videoURL = selectedVideoURL, mediaType == .video {
                 ShareViewController(items: [videoURL], activities: nil)
             }
@@ -866,11 +865,15 @@ struct ContentView: View {
         switch media.type {
         case .image:
             mediaManager.loadFullResolutionImage(for: media.asset) { url in
-                if let url = url,
-                   let image = UIImage(contentsOfFile: url.path) {
+                if let url = url {
                     DispatchQueue.main.async {
                         self.selectedVideoURL = nil  // 清除视频URL
-                        self.selectedImage = image
+                        // 保存分享URL
+                        self.mediaManager.currentShareURL = url
+                        // 加载预览图
+                        if let image = UIImage(contentsOfFile: url.path) {
+                            self.selectedImage = image
+                        }
                         self.mediaType = .image
                     }
                 }
